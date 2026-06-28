@@ -77,6 +77,28 @@ def score_to_verdict(score: int) -> str:
         return "observe"
     return "avoid"
 
+# ─── Telegram ─────────────────────────────────────────────────────────────────
+TG_API_ID: int = int(os.getenv("TG_API_ID", "0"))
+TG_API_HASH: str = os.getenv("TG_API_HASH", "")
+
+# Filename for the Telethon session (stored as <name>.session — gitignored)
+TG_SESSION_NAME: str = os.getenv("TG_SESSION_NAME", "xau_signal_bot")
+
+# Separate Telethon session for the backfill script. Telethon cannot share one
+# session file across two running processes, so backfill must not reuse the live
+# ingestor's session. Its own session lets it run concurrently with the listener.
+TG_BACKFILL_SESSION_NAME: str = os.getenv(
+    "TG_BACKFILL_SESSION_NAME", f"{TG_SESSION_NAME}_backfill"
+)
+
+# Comma-separated Telegram channel IDs to monitor.
+# Run `python scripts/list_channels.py` once to find your channel IDs.
+# Example: TRACKED_CHANNEL_IDS=-1001234567890,-1009876543210
+TRACKED_CHANNEL_IDS: list[int] = [
+    int(x.strip()) for x in os.getenv("TRACKED_CHANNEL_IDS", "").split(",")
+    if x.strip()
+]
+
 # ─── Supabase ─────────────────────────────────────────────────────────────────
 SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -85,6 +107,50 @@ SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 DISCORD_BOT_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")
 DISCORD_CHANNEL_ID: int = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 
+# ─── MT5 broker server timezone ───────────────────────────────────────────────
+# MT5 profit screenshots display times in the broker's server timezone, NOT UTC.
+# The screenshot cross-checker uses this to convert those times to UTC correctly.
+#
+# RoboForex uses EET (Eastern European Time):
+#   - UTC+2 in winter  (last Sunday October  → last Sunday March)
+#   - UTC+3 in summer  (last Sunday March    → last Sunday October)
+#
+# "Europe/Riga" covers EET/EEST automatically — DST is handled for you.
+# To verify: in MT5 look at the "Server" clock in the bottom status bar.
+# Compare it to UTC (worldtimeserver.com). The offset is your broker's offset.
+#
+# Common alternatives:
+#   "Etc/UTC"          — broker uses UTC (rare but some ECN brokers do)
+#   "America/New_York" — broker uses EST/EDT (some US-based brokers)
+MT5_SERVER_TIMEZONE: str = os.getenv("MT5_SERVER_TIMEZONE", "Europe/Riga")
+
 # ─── Anthropic (Phase 7) ──────────────────────────────────────────────────────
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
+
+# ─── AI Intelligence Feature Flags (Phase 8) ─────────────────────────────────
+# Set any to "false" in .env to disable that feature while keeping the API key.
+AI_PARSER_ENABLED: bool = os.getenv("AI_PARSER_ENABLED", "true").lower() == "true"
+AI_QUALITY_ENABLED: bool = os.getenv("AI_QUALITY_ENABLED", "true").lower() == "true"
+AI_EDIT_ANALYSIS_ENABLED: bool = os.getenv("AI_EDIT_ANALYSIS_ENABLED", "true").lower() == "true"
+AI_CHANNEL_ANALYSIS_ENABLED: bool = os.getenv("AI_CHANNEL_ANALYSIS_ENABLED", "true").lower() == "true"
+
+# ─── AI Quality Weighting ─────────────────────────────────────────────────────
+# Signals with quality_score below this are downweighted in performance components.
+AI_LOW_QUALITY_THRESHOLD: float = float(os.getenv("AI_LOW_QUALITY_THRESHOLD", "0.4"))
+# Weight multiplier for sub-threshold signals (0.5 = half weight in win rate/expectancy).
+AI_LOW_QUALITY_WEIGHT: float = float(os.getenv("AI_LOW_QUALITY_WEIGHT", "0.5"))
+
+# ─── AI Edit Penalty ─────────────────────────────────────────────────────────
+# Per-edit integrity penalty = ai_suspicion_score × PENALTY_AI_SUSPICIOUS_EDIT.
+# At suspicion_score=1.0 this is 5.0 pts; at 0.0 (innocent typo) it is 0.0.
+# Falls back to flat PENALTY_POST_MOVE_EDIT (3.0) for edits without AI analysis.
+PENALTY_AI_SUSPICIOUS_EDIT: float = float(os.getenv("PENALTY_AI_SUSPICIOUS_EDIT", "5.0"))
+
+# ─── AI Channel Behavior Penalty ─────────────────────────────────────────────
+# fraud_risk_score × AI_BEHAVIOR_PENALTY_MAX = integrity deduction, capped at max.
+AI_BEHAVIOR_PENALTY_MAX: float = float(os.getenv("AI_BEHAVIOR_PENALTY_MAX", "10.0"))
+# Minimum resolved signals before channel behavior analysis runs.
+AI_CHANNEL_ANALYSIS_MIN_SIGNALS: int = int(
+    os.getenv("AI_CHANNEL_ANALYSIS_MIN_SIGNALS", str(MIN_SIGNALS_FLOOR))
+)

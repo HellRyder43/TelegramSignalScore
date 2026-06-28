@@ -1,6 +1,9 @@
 # ─── Secrets ─────────────────────────────────────────────────────────────────
 .env
-*.session          # Telethon session files — as sensitive as a password
+# Telethon session files — as sensitive as a password.
+# (Inline comments are NOT allowed in .gitignore; keep the comment on its own line.)
+*.session
+*.session-journal
 
 # ─── Python ──────────────────────────────────────────────────────────────────
 __pycache__/

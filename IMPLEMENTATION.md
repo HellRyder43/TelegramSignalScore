@@ -388,19 +388,515 @@ Open [http://localhost:8000/health](http://localhost:8000/health). Should return
 
 ---
 
-## Troubleshooting quick reference
+## 11. Before you start for the very first time
 
-| Symptom | Likely cause | Fix |
+This section covers three quick one-time tasks. You only ever do these once, then never again.
+
+---
+
+### 11a. Apply the Realtime database migration
+
+**What this does:** lets the dashboard refresh automatically when trust scores change, without you having to reload the page.
+
+1. Go to [supabase.com](https://supabase.com) → open your project.
+2. In the left sidebar click **SQL Editor**.
+3. Click **New query** (top-right of the SQL editor pane).
+4. In VS Code, open the file `supabase/migrations/002_enable_realtime.sql`. Press **Ctrl+A** to select all, **Ctrl+C** to copy.
+5. Click inside the Supabase SQL editor, press **Ctrl+V** to paste, then click **Run**.
+6. You should see `Success. No rows returned`. That's correct — it means it worked.
+
+> If you see `ERROR: relation already exists` or `already added`, that means you ran this before. That's fine — move on.
+
+✅ **Done when:** Supabase shows success (or "already added").
+
+---
+
+### 11b. Check the AI migration is in place (nothing to run — just verify)
+
+**What this is:** the AI intelligence migration (`003_ai_intelligence.sql`) was already applied automatically when the system was built. You don't need to run it. This step just confirms it's there.
+
+1. In Supabase, click **Table Editor** in the left sidebar.
+2. Scroll through the list of tables. You should see **`signal_quality_assessments`** and **`channel_ai_assessments`** in the list alongside the other tables.
+
+> If those two tables are missing, go to SQL Editor → New query → open `supabase/migrations/003_ai_intelligence.sql` in VS Code → copy/paste → Run.
+
+✅ **Done when:** both AI tables are visible in Table Editor.
+
+---
+
+### 11c. Find your Telegram channel IDs and set them in `.env`
+
+**What this does:** the system needs the numeric IDs of your Telegram channels (not their names — actual numbers like `-1001234567890`). This script logs into Telegram as you and lists every channel you're a member of, with their IDs.
+
+**Step 1 — Open a PowerShell window in the project root and activate the Python environment:**
+
+```powershell
+cd D:\AmirForex\TelegramSignalScore\backend
+.\.venv\Scripts\Activate.ps1
+cd ..
+```
+
+You'll see `(.venv)` appear at the start of the prompt. That means the environment is active. Every command in this section needs this environment active.
+
+**Step 2 — Run the channel listing script:**
+
+```powershell
+python -m scripts.list_channels
+```
+
+The **very first time** you run any Telegram script, it will pause and ask:
+
+```
+Please enter your phone number (with country code, e.g. +60123456789):
+```
+
+Type your number and press Enter. Telegram will send a **login code** to your Telegram app on your phone. Type that code when asked. This creates a session file on your computer — after this you won't be asked to log in again.
+
+**Step 3 — Read the output:**
+
+The script prints a table like this:
+
+```
+ID                   Type      Members  Name
+-1001234567890       channel   48200    Gold Signals VIP
+-1009876543210       channel   12300    XAUUSD Pro
+-1007777777777       channel    3100    FX Premium Alerts
+...
+```
+
+Write down the **ID** column for every channel you want to track. IDs are always negative numbers starting with `-100`.
+
+**Step 4 — Add the IDs to your `.env` file:**
+
+Open `.env` in VS Code. Find the line that says `TRACKED_CHANNEL_IDS=` and fill it in:
+
+```
+TRACKED_CHANNEL_IDS=-1001234567890,-1009876543210,-1007777777777
+```
+
+Rules:
+- Separate multiple IDs with commas — no spaces
+- Negative numbers are correct
+- The system will only monitor these channels and ignore everything else
+
+Save the file.
+
+✅ **Done when:** `.env` has `TRACKED_CHANNEL_IDS=` set with at least one ID.
+
+---
+
+## 12. Day 1 — Starting everything and loading historical data
+
+This is what you do on the **very first day** you run the system. You'll start the three background processes, then load history from your channels so the dashboard has real data to score.
+
+**Set aside about 30–60 minutes.** Most of that time is waiting for scripts to finish — you don't need to watch them.
+
+**Before you begin:** make sure MetaTrader 5 is open, logged into your RoboForex account, and an M1 XAUUSD chart is visible. If MT5 is closed, signals can't be verified and scores won't update.
+
+---
+
+### Step 1 — Open four PowerShell windows
+
+You'll need four separate PowerShell windows open at the same time. The easiest way:
+
+- Right-click the PowerShell icon in your taskbar → **Open new window** — do this four times.
+- Arrange them on screen so you can see all four (Windows key + arrow keys to snap them).
+
+Label them mentally: Window A, Window B, Window C, Window D.
+
+---
+
+### Step 2 — Start the Backend API (Window A)
+
+**What this does:** runs the engine that verifies signals against MT5 price data every 5 minutes and updates trust scores. It also sends Discord follow-up messages when a signal resolves.
+
+In **Window A**, run:
+
+```powershell
+cd D:\AmirForex\TelegramSignalScore\backend
+.\.venv\Scripts\Activate.ps1
+cd ..
+uvicorn backend.api.main:app --host 0.0.0.0 --port 8000
+```
+
+Wait for this output (takes a few seconds):
+
+```
+INFO:     Started server process [12345]
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO      backend.api.main — Discord notifier initialized
+```
+
+> The `Discord notifier initialized` line only appears if `DISCORD_BOT_TOKEN` is set in `.env`. If you see it, Discord alerts are working. If you don't see it, double-check your Discord token in `.env`.
+
+**Leave Window A running.** Do not close it or press Ctrl+C.
+
+---
+
+### Step 3 — Start the Telegram listener (Window B)
+
+**What this does:** connects to Telegram as you, listens to your tracked channels in real time, and automatically saves every new message, edit, and deletion. When it sees a trading signal, it sends an instant Discord alert.
+
+In **Window B**, run:
+
+```powershell
+cd D:\AmirForex\TelegramSignalScore\backend
+.\.venv\Scripts\Activate.ps1
+cd ..
+python -m backend.ingestor
+```
+
+Wait for this output:
+
+```
+INFO      backend.ingestor — Telegram ingestor running. Press Ctrl-C to stop.
+```
+
+> If Telethon asks for your phone number again here, enter it the same way you did in step 11c. This shouldn't happen if you already ran `list_channels`, but occasionally the session needs refreshing.
+
+**Leave Window B running.** From this moment on, any new messages posted in your tracked channels will be captured automatically.
+
+---
+
+### Step 4 — Start the dashboard (Window C)
+
+**What this does:** starts the web dashboard you view in your browser.
+
+In **Window C**, run:
+
+```powershell
+cd D:\AmirForex\TelegramSignalScore\frontend
+npm run dev
+```
+
+Wait until you see:
+
+```
+▲ Next.js 14.x.x
+- Local:        http://localhost:3000
+- Ready in 2.1s
+```
+
+Now open your browser and go to **http://localhost:3000**.
+
+The dashboard will show an empty table for now — that's normal. You haven't loaded any history yet. You'll fill it in the next steps.
+
+**Leave Window C running.**
+
+---
+
+### Step 5 — Load historical messages for each channel (Window D)
+
+**What this does:** goes back through each channel's Telegram message history and imports all the signals, edits, and deletions that happened before you started the listener. This gives the system enough past data to calculate a meaningful trust score.
+
+> **First-run login (one time only):** backfill uses its **own** Telegram session, separate from the live listener in Window B. Telegram cannot share one session across two running processes — if backfill reused the listener's session it would hang forever at "Connecting to Telegram". So the **very first** backfill command will pause and ask for your phone number and a login code (same as step 11c). Enter them once; a separate `xau_signal_bot_backfill.session` file is created and you won't be asked again. Because it's a separate session, **backfill is safe to run while the listener (Window B) is up** — no need to stop it.
+
+In **Window D**, run these commands. Replace the channel IDs with the ones you found in step 11c. **Run one command per channel.**
+
+```powershell
+cd D:\AmirForex\TelegramSignalScore\backend
+.\.venv\Scripts\Activate.ps1
+cd ..
+
+# Run for each channel — replace the ID each time:
+python -m scripts.backfill --channel -1001234567890 --limit 500
+python -m scripts.backfill --channel -1009876543210 --limit 500
+python -m scripts.backfill --channel -1007777777777 --limit 500
+```
+
+**What `--limit 500` means:** fetch the last 500 messages from that channel. For channels that post multiple signals per day, 500 messages may only cover a few weeks. If you want more history, increase the number:
+- `--limit 1000` → roughly 1–3 months depending on how active the channel is
+- `--limit 2000` → more history but takes longer
+
+**What you'll see while it runs:**
+
+```
+Backfilling channel -1001234567890 (Gold Signals VIP)...
+  50 processed (inserted=48, skipped=2, signals=12)
+  100 processed (inserted=95, skipped=5, signals=28)
+  ...
+Done. 487 inserted, 13 skipped, 94 signals found.
+```
+
+Wait for each one to finish before running the next. It typically takes 1–5 minutes per channel depending on message count and your internet speed.
+
+✅ **Done when:** all your channels have been backfilled and the script prints "Done" for each one.
+
+---
+
+### Step 6 — Process channel images (Window D, same window)
+
+**What this does:** during backfill, any message that contained an image (chart screenshots, MT5 profit screenshots) was saved but not analysed yet — the system needs to look at each image with AI vision to understand what it shows. This step does that.
+
+Still in Window D, run:
+
+```powershell
+python -m scripts.reprocess_images --limit 200
+```
+
+**What you'll see:**
+
+```
+Reprocessing 200 deferred images...
+  msg=11111 → zone_image signal inserted (dir=BUY)
+  msg=22222 → mt5_screenshot, verdict=confirmed
+  msg=33333 → non_signal (no levels found)
+  ...
+Done. 200 images processed.
+```
+
+**Cost note:** each image uses 1–2 Claude API calls. 200 images costs roughly $0.20–$0.60. You can re-run this any time; images that are already processed are skipped automatically.
+
+If you have more than 200 deferred images (check Window A logs — it will say `image_deferred` for images that weren't processed during backfill), run it again with a higher limit:
+
+```powershell
+python -m scripts.reprocess_images --limit 500
+```
+
+✅ **Done when:** the script finishes and prints "Done".
+
+---
+
+### Step 7 — Run AI quality assessment on your history (Window D, same window)
+
+**What this does:** goes through all the signals and edits you just imported and uses Claude to assess each one:
+- **Signals:** is this a genuine forward signal, or is it a hindsight post pretending to be one? How high quality is it?
+- **Edits:** was this edit an innocent typo fix, or did the channel owner suspiciously change the price levels after the market moved?
+- **Channels:** based on all the above, how fraudulent does this channel's overall behaviour look?
+
+This is what makes the trust scores meaningful instead of just counting wins and losses.
+
+In Window D, run:
+
+```powershell
+python -m scripts.ai_assess --mode all --delay 1.0
+```
+
+This runs three steps automatically, one after another:
+
+```
+[signals] Assessing quality for 94 signals...
+  10 / 94 done
+  20 / 94 done
+  ...
+Signals: assessed 94 rows.
+
+[edits] Analyzing intent for 18 edits...
+  10 / 18 done
+  ...
+Edits: analyzed 18 rows.
+
+[channels] Analyzing behavior for 3 channels...
+  Gold Signals VIP — fraud_risk=0.12, findings: Channel posts genuine forward signals...
+  XAUUSD Pro — fraud_risk=0.71, findings: 3 of 5 edits changed TP levels after price...
+  ...
+Channels: analyzed 3.
+```
+
+**How long this takes:** roughly 1–2 seconds per signal/edit (the `--delay 1.0` adds a pause between calls to avoid rate limits). For 100 signals + 20 edits = about 2–3 minutes total.
+
+**Cost:** approximately $0.30–$0.70 for a few hundred signals/edits.
+
+✅ **Done when:** the script prints results for all three modes and exits.
+
+---
+
+### Step 8 — Trigger a verification pass and see scores in the dashboard
+
+**What this does:** runs the MT5 price verifier against all the signals you just imported. For each signal, it checks whether the price actually hit stop-loss or take-profit, and records the outcome (win/loss/unresolved). These outcomes are what drive the trust score numbers.
+
+Make sure MT5 is open and logged in, then in Window D run:
+
+```powershell
+curl http://localhost:8000/verify/run -X POST
+```
+
+You'll see in **Window A**:
+
+```
+INFO      backend.api.main — Verification pass: processed 47 signals
+INFO      backend.api.main — Score updated for channel: Gold Signals VIP
+INFO      backend.api.main — Score updated for channel: XAUUSD Pro
+```
+
+Now go to **http://localhost:3000** in your browser. You should see:
+- Each tracked channel appears as a row in the table
+- Trust Score column shows a number (0–100)
+- Verdict column shows `avoid`, `observe`, `caution`, or `trusted`
+- Win rate, signal count, and other stats are populated
+
+> Signals posted very recently (less than 48 hours ago) may still show as "unresolved" — that's normal. The verification loop in Window A will keep checking them every 5 minutes automatically.
+
+✅ **Done when:** the dashboard shows at least one channel with a trust score and signal count.
+
+---
+
+### What you now have
+
+At this point your system is fully running:
+
+| Component | Status |
+|---|---|
+| Window A (Backend API) | Running — verifies signals every 5 min, updates scores |
+| Window B (Ingestor) | Running — capturing new messages, edits, and deletions live |
+| Window C (Dashboard) | Running — visible at http://localhost:3000 |
+| Historical data | Loaded — backfill + images + AI assessment + scores all done |
+| Discord alerts | Active — new forward signals will ping you instantly |
+
+You can close Window D — it was only needed for the one-time setup scripts.
+
+---
+
+## 13. Every day after — starting the system
+
+From Day 2 onwards, the process is much simpler. You just need to start the three background processes. **You never run the setup scripts again** (backfill, reprocess_images, ai_assess) — those were one-time only.
+
+---
+
+### Before you open anything
+
+Make sure **MetaTrader 5** is open and logged into your RoboForex account with an M1 XAUUSD chart visible. The verifier can't work without it.
+
+---
+
+### Open three PowerShell windows and run one command in each
+
+**Window 1 — Backend API:**
+
+```powershell
+cd D:\AmirForex\TelegramSignalScore\backend
+.\.venv\Scripts\Activate.ps1
+cd ..
+uvicorn backend.api.main:app --host 0.0.0.0 --port 8000
+```
+
+Wait for: `Uvicorn running on http://0.0.0.0:8000`
+
+---
+
+**Window 2 — Telegram ingestor:**
+
+```powershell
+cd D:\AmirForex\TelegramSignalScore\backend
+.\.venv\Scripts\Activate.ps1
+cd ..
+python -m backend.ingestor
+```
+
+Wait for: `Telegram ingestor running. Press Ctrl-C to stop.`
+
+---
+
+**Window 3 — Dashboard:**
+
+```powershell
+cd D:\AmirForex\TelegramSignalScore\frontend
+npm run dev
+```
+
+Wait for: `Ready in x.xs`
+
+Then open **http://localhost:3000** in your browser. Everything you saw yesterday is still there — trust scores, signal history, edit logs. The table updates automatically as new signals come in.
+
+---
+
+### What happens automatically while the system is running
+
+You don't need to do anything — just leave the three windows open:
+
+| Every time a new signal is posted | Ingestor captures it, AI assesses quality, Discord alert fires |
+|---|---|
+| Every time a signal is edited | Edit is recorded, AI classifies intent (typo vs. suspicious), Discord follow-up fires if it was a signal |
+| Every time a signal is deleted | Deletion is recorded, Discord follow-up fires, channel's delete count goes up |
+| Every 5 minutes | MT5 verifier checks all open signals — any that have resolved get scored and trust scores update |
+| After each verification pass | Channel behavior is re-assessed by AI if new signals resolved |
+
+---
+
+### To stop the system
+
+Press **Ctrl+C** in each of the three windows. The system saves everything to Supabase as it goes, so nothing is lost — when you start again tomorrow, it picks up exactly where it left off.
+
+---
+
+### Tips for the rest of the week
+
+**If you restart and don't see recent signals on the dashboard:** they're already in Supabase. The dashboard loads from the database, not from memory — a restart changes nothing.
+
+**If you missed a few hours of live monitoring:** the ingestor can't backfill edits/deletions that happened while it was offline (Telegram doesn't replay those). But new messages posted while you were offline will be fetched when the ingestor reconnects. Run `python -m scripts.backfill --channel <id> --limit 100` in a fourth window to catch up on any missed messages. Backfill uses its own session, so it's fine to run this while the listener (Window 2) is still running.
+
+**If a channel's score looks wrong after a few days:** the AI channel assessment runs automatically, but you can force a fresh one by running in a fourth window (while Window 1 is running):
+```powershell
+curl http://localhost:8000/ai/assess/channel/<channel-uuid> -X POST
+```
+Get the UUID from Supabase → Table Editor → channels → copy the `id` value for that channel.
+
+**If MT5 was closed and you missed a verification window:** open MT5, then in a fourth window run:
+```powershell
+cd D:\AmirForex\TelegramSignalScore\backend
+.\.venv\Scripts\Activate.ps1
+cd ..
+curl http://localhost:8000/verify/run -X POST
+```
+This triggers an immediate pass — you don't have to wait 5 minutes.
+
+---
+
+## 14. Optional: tune AI scoring behaviour
+
+These settings have sensible defaults. You don't need to change them unless the trust scores feel off after a week of data.
+
+Open `.env` in VS Code and add or change any of these lines:
+
+```
+# Set any of these to false to disable that specific AI feature:
+AI_PARSER_ENABLED=true           # AI tries to parse signals the regex couldn't read
+AI_QUALITY_ENABLED=true          # AI filters out retrospective/hindsight signals
+AI_EDIT_ANALYSIS_ENABLED=true    # AI judges whether edits are innocent or suspicious
+AI_CHANNEL_ANALYSIS_ENABLED=true # AI gives channels an overall fraud-risk score
+
+# A signal with quality_score below this threshold is downweighted in the score:
+AI_LOW_QUALITY_THRESHOLD=0.4     # 0.0–1.0, default 0.4
+AI_LOW_QUALITY_WEIGHT=0.5        # how much to downweight it (0.5 = count as half a signal)
+
+# Integrity penalty per suspicious edit (0.0 for typos, up to this for clear manipulation):
+PENALTY_AI_SUSPICIOUS_EDIT=5.0
+
+# Max integrity points a channel can lose from the overall fraud-risk assessment:
+AI_BEHAVIOR_PENALTY_MAX=10.0
+```
+
+After changing any of these, **restart Window 1** (Ctrl+C then run the uvicorn command again), then run:
+
+```powershell
+python -m scripts.ai_assess --mode channels
+```
+
+to recalculate channel scores with the new settings.
+
+---
+
+## 15. Troubleshooting
+
+| Problem | Most likely cause | Fix |
 |---|---|---|
-| Verifier returns no candles | MT5 closed, wrong symbol name, or history not cached | Open MT5, confirm `MT5_SYMBOL` exactly, scroll an M1 gold chart back |
-| Telegram login loops / fails | Wrong code, or api_id/hash mismatch | Re-copy api_id/api_hash; codes expire fast — request a fresh one |
-| Bot offline in Discord | System not running, or bad token | Start the listener/bot; if token leaked or wrong, Reset Token and update `.env` |
-| Bot can't post in channel | Missing permission or wrong channel ID | Re-invite with Send Messages + Embed Links; re-copy Channel ID (Developer Mode on) |
-| Images not parsed | No Anthropic key or no billing credit | Add key + credit in console.anthropic.com |
-| Account warning from Telegram | API used too aggressively | Keep usage passive (read-only); never spam/scrape |
-| `Activate.ps1` blocked by PowerShell | Execution policy restriction | `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` |
-| `pip install` fails on `MetaTrader5` | Not on Windows, or Python version mismatch | MT5 package is Windows-only; must use Python 3.11+ 64-bit |
-| Supabase `create_client` import error | Wrong package version or venv not active | Activate venv first; `pip install supabase==2.10.0` |
-| Dashboard shows "env not defined" error | `.env.local` missing or keys not prefixed `NEXT_PUBLIC_` | Create `frontend/.env.local` with both `NEXT_PUBLIC_` keys |
-| Migration fails with "already exists" | Migration run twice | Check Table Editor for all 8 tables; if present, ignore the error |
-| `uvicorn` command not found | Venv not active | Run `.\.venv\Scripts\Activate.ps1` from the backend folder first |
+| Window 1 starts but shows no `Discord notifier initialized` | `DISCORD_BOT_TOKEN` or `DISCORD_CHANNEL_ID` missing or wrong in `.env` | Double-check both values in `.env`; restart Window 1 |
+| Window 2 starts but nothing happens when channels post | `TRACKED_CHANNEL_IDS` is empty or has wrong IDs | Re-run `python -m scripts.list_channels`, copy IDs, update `.env`, restart Window 2 |
+| Telegram keeps asking for login code | Session file missing or expired | Re-run `python -m scripts.list_channels` to create a fresh session, then restart Window 2 |
+| Dashboard at localhost:3000 shows empty table | No channels backfilled yet, or Window 1 not running | Complete Steps 5–8 in §12; make sure Window 1 is running |
+| Trust score shows 0 for all channels | No signals have resolved yet | MT5 must be open; run `curl http://localhost:8000/verify/run -X POST` to force a check |
+| Verifier says "MT5 not connected" | MT5 is closed or not logged in | Open MT5, log into RoboForex, load an M1 XAUUSD chart; retry |
+| `MT5_SYMBOL` error in logs | Symbol name is wrong | Open MT5 → Market Watch → find the exact gold symbol name (e.g. `XAUUSD.r`) → update `.env` |
+| Images in channels are not being classified | `ANTHROPIC_API_KEY` missing or no billing credit | Add key and billing at console.anthropic.com; then run `reprocess_images` |
+| `Activate.ps1` blocked by PowerShell | Execution policy restriction on your machine | Run this once: `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` |
+| `uvicorn: command not found` | Venv not activated | You must run `.\.venv\Scripts\Activate.ps1` before any `uvicorn` or `python -m` command |
+| `pip install` error on `MetaTrader5` | Not on Windows, or using 32-bit Python | MT5 package only works on Windows with 64-bit Python 3.11+ |
+| Supabase `create_client` import error | Wrong package version or venv not active | Activate venv first; run `pip install supabase==2.10.0` |
+| Dashboard shows "env not defined" error | `frontend/.env.local` missing or wrong keys | Create `frontend/.env.local` with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` |
+| Migration fails with "already exists" | Migration was already applied | Check Supabase Table Editor — if the tables are there, ignore the error |
+| `ai_assess` prints "ANTHROPIC_API_KEY not set" | Key missing from `.env` | Add `ANTHROPIC_API_KEY=sk-ant-...` to `.env`; no restart needed for scripts |
+| AI assessment runs but all scores are the same | Rate limit or very slow responses | Increase delay: `--delay 2.0` |
+| Trust score didn't change after `ai_assess --mode channels` | Channel has fewer than 3 resolved signals | Backfill more history or wait for more signals to resolve |
+| `signal_quality_assessments` table not found | Migration 003 not applied | SQL Editor → paste `003_ai_intelligence.sql` → Run |
+| Discord bot is offline in your server | System not running | Start Window 1 and Window 2; bot only comes online when the system is running |
+| Bot can't post in Discord channel | Missing permissions or wrong channel ID | Re-invite bot with Send Messages + Embed Links permissions; re-copy Channel ID with Developer Mode on |
