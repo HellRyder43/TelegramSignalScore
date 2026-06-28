@@ -18,6 +18,7 @@ import logging
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from dotenv import load_dotenv
 from supabase import create_client
@@ -31,11 +32,17 @@ from backend.config import (
     SUPABASE_SERVICE_ROLE_KEY,
     TG_API_ID,
     TG_API_HASH,
-    TG_SESSION_NAME,
+    TG_BACKFILL_SESSION_NAME,
     MT5_SYMBOL,
     ANTHROPIC_API_KEY,
 )
 from backend.db_utils import maybe_one
+
+# Reuse the backfill session (separate from the live ingestor's session) so this
+# script can run alongside the listener without Telethon's "two clients sharing
+# one session" hang. Resolve to an absolute path from the project root.
+_PROJECT_ROOT = Path(__file__).parent.parent
+_SESSION_PATH = str(_PROJECT_ROOT / TG_BACKFILL_SESSION_NAME)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -256,8 +263,25 @@ async def main() -> None:
     if not rows:
         return
 
-    tg_client = TelegramClient(TG_SESSION_NAME, TG_API_ID, TG_API_HASH)
-    await tg_client.start()
+    tg_client = TelegramClient(_SESSION_PATH, TG_API_ID, TG_API_HASH)
+
+    logger.info("Connecting to Telegram (reprocess session)...")
+    try:
+        await asyncio.wait_for(tg_client.connect(), timeout=30)
+    except asyncio.TimeoutError:
+        logger.error("Could not connect within 30s — likely a network issue. Try again.")
+        sys.exit(1)
+    except Exception as exc:
+        logger.error("Telegram connection failed: %s", exc)
+        sys.exit(1)
+
+    if not await tg_client.is_user_authorized():
+        logger.info(
+            "First-time login for this session — Telegram will ask for your phone "
+            "number and a login code (one time only)."
+        )
+        await tg_client.start()  # interactive; connection already established above
+    logger.info("Connected.")
 
     counts: dict[str, int] = {"zone_image": 0, "mt5_screenshot": 0, "non_signal": 0, "image_deferred": 0}
 

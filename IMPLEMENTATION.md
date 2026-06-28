@@ -632,6 +632,8 @@ Wait for each one to finish before running the next. It typically takes 1–5 mi
 
 **What this does:** during backfill, any message that contained an image (chart screenshots, MT5 profit screenshots) was saved but not analysed yet — the system needs to look at each image with AI vision to understand what it shows. This step does that.
 
+> **Session note:** like backfill, this uses the **separate** backfill session (`xau_signal_bot_backfill.session`), so it's safe to run while the live listener (Window B) is up — no need to stop it. You already logged that session in during Step 5, so there's no new login here.
+
 Still in Window D, run:
 
 ```powershell
