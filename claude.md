@@ -27,7 +27,7 @@ The system must distinguish four kinds of post; this distinction drives parsing,
 
 - **Text signal** — e.g. "BUY 2650, SL 2645, TP 2660". Fully verifiable.
 - **Chart + zone image** — a chart screenshot with a colored entry zone and a buy/sell instruction. Vision estimates the zone bounds as an entry range; SL/TP come from accompanying text if present, otherwise are estimated conservatively. These are **zone-estimated** signals and must be kept visibly separate from signals with stated levels — never let estimates inflate a channel's stated-signal record.
-- **MT5 profit screenshot** — a closed-trade screenshot showing a win. This is a _claim about a past trade_, not a forward signal. Vision extracts the open/close prices and times; the system cross-checks them against price data to mark the claim **confirmed**, **contradicted** (price never went there → fabricated, a serious red flag), or **unverifiable**. **A screenshot only ever shows a winner, never the losses, so confirmed screenshots must never be averaged into win rate** — they're an integrity input, not a performance one.
+- **MT5 profit screenshot** — a closed-trade screenshot showing a win. This is a _claim about a past trade_, not a forward signal. Vision extracts the open/close prices and times; the system cross-checks them against price data to mark the claim **confirmed**, **contradicted** (price never went there → fabricated, a serious red flag), or **unverifiable**. **A screenshot only ever shows a winner, sometimes the losses**.
 - **Non-signal** — commentary, hype, charts with no levels. Logged for transparency, not scored.
 
 ## Verification principles
