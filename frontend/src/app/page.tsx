@@ -1,13 +1,9 @@
-import { getMockChannels } from '@/lib/mock-data'
-import { ChannelsTable } from '@/components/channels-table'
+import { getChannels } from '@/lib/supabase/queries'
+import { ChannelsRealtime } from '@/components/channels-realtime'
 import { ShieldCheck } from 'lucide-react'
 
-export default function HomePage() {
-  const channels = getMockChannels()
-
-  const totalVerified = channels.reduce((s, c) => s + c.sample_size, 0)
-  const trusted = channels.filter((c) => c.verdict === 'trusted').length
-  const avoid = channels.filter((c) => c.verdict === 'avoid').length
+export default async function HomePage() {
+  const channels = await getChannels()
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -28,40 +24,9 @@ export default function HomePage() {
         </div>
       </header>
 
-      {/* Main */}
+      {/* Main — stats + table rendered by ChannelsRealtime (updates live) */}
       <main className="flex-1 mx-auto w-full max-w-7xl px-6 py-8">
-        {/* Summary stats — unified surface */}
-        <div className="rounded-xl border border-border bg-card shadow-sm mb-8 overflow-hidden">
-          <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-border">
-            <div className="px-6 py-5">
-              <p className="text-[11px] text-muted-foreground uppercase tracking-widest mb-1.5">Channels tracked</p>
-              <p className="font-mono text-3xl font-bold text-foreground">{channels.length}</p>
-            </div>
-            <div className="px-6 py-5">
-              <p className="text-[11px] text-muted-foreground uppercase tracking-widest mb-1.5">Verified signals</p>
-              <p className="font-mono text-3xl font-bold text-foreground">{totalVerified}</p>
-            </div>
-            <div className="px-6 py-5">
-              <p className="text-[11px] text-muted-foreground uppercase tracking-widest mb-1.5">Trusted channels</p>
-              <p className="font-mono text-3xl font-bold text-[--verdict-trusted]">{trusted}</p>
-            </div>
-            <div className="px-6 py-5">
-              <p className="text-[11px] text-muted-foreground uppercase tracking-widest mb-1.5">Avoid</p>
-              <p className="font-mono text-3xl font-bold text-[--verdict-avoid]">{avoid}</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Table */}
-        <div className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
-          <div className="px-6 pt-5 pb-3">
-            <h1 className="text-base font-semibold text-foreground">Channel Rankings</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Click any column header to sort. Click a row to see the full signal history and score breakdown.
-            </p>
-          </div>
-          <ChannelsTable channels={channels} />
-        </div>
+        <ChannelsRealtime initialChannels={channels} />
       </main>
 
       {/* Footer disclaimer */}

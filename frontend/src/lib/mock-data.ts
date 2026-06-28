@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   Channel,
   ChannelDetail,
   ScoreBreakdown,
@@ -244,7 +244,7 @@ const CH001_SIGNALS: Signal[] = [
   {
     id: 'sig_001',
     channel_id: 'ch_001',
-    message_id: 5001,
+    message_id: '5001',
     signal_type: 'text',
     source: 'live',
     direction: 'BUY',
@@ -274,7 +274,7 @@ const CH001_SIGNALS: Signal[] = [
   {
     id: 'sig_002',
     channel_id: 'ch_001',
-    message_id: 4988,
+    message_id: '4988',
     signal_type: 'text',
     source: 'live',
     direction: 'SELL',
@@ -302,11 +302,11 @@ const CH001_SIGNALS: Signal[] = [
     edits: [
       {
         id: 'edit_001',
-        message_id: 4988,
+        message_id: '4988',
         channel_id: 'ch_001',
         edit_number: 1,
         content_before: 'SELL GOLD 2335\nSL: 2343\nTP: 2315',
-        content_after: 'SELL GOLD 2335\nSL: 2343\nTP: 2312\n✅ Updated',
+        content_after: 'SELL GOLD 2335\nSL: 2343\nTP: 2312\nâœ… Updated',
         edited_at: '2026-06-23T14:19:00Z',
         is_post_move_edit: true,
       },
@@ -315,7 +315,7 @@ const CH001_SIGNALS: Signal[] = [
   {
     id: 'sig_003',
     channel_id: 'ch_001',
-    message_id: 4975,
+    message_id: '4975',
     signal_type: 'text',
     source: 'live',
     direction: 'BUY',
@@ -345,7 +345,7 @@ const CH001_SIGNALS: Signal[] = [
   {
     id: 'sig_004',
     channel_id: 'ch_001',
-    message_id: 4960,
+    message_id: '4960',
     signal_type: 'text',
     source: 'live',
     direction: 'BUY',
@@ -356,7 +356,7 @@ const CH001_SIGNALS: Signal[] = [
     take_profit_1: 2350.00,
     take_profit_2: null,
     take_profit_3: null,
-    raw_text: '🟢 BUY GOLD\nEntry: 2328\nSL: 2320\nTP: 2350',
+    raw_text: 'ðŸŸ¢ BUY GOLD\nEntry: 2328\nSL: 2320\nTP: 2350',
     parsed_at: '2026-06-21T13:45:05Z',
     posted_at: '2026-06-21T13:44:30Z',
     confidence: 0.94,
@@ -375,7 +375,7 @@ const CH001_SIGNALS: Signal[] = [
   {
     id: 'sig_005',
     channel_id: 'ch_001',
-    message_id: 4820,
+    message_id: '4820',
     signal_type: 'text',
     source: 'backfill',
     direction: 'BUY',
@@ -405,7 +405,7 @@ const CH001_SIGNALS: Signal[] = [
   {
     id: 'sig_006',
     channel_id: 'ch_001',
-    message_id: 4930,
+    message_id: '4930',
     signal_type: 'zone_estimated',
     source: 'live',
     direction: 'BUY',
@@ -435,7 +435,7 @@ const CH001_SIGNALS: Signal[] = [
   {
     id: 'sig_007',
     channel_id: 'ch_001',
-    message_id: 4904,
+    message_id: '4904',
     signal_type: 'text',
     source: 'live',
     direction: 'SELL',
@@ -465,7 +465,7 @@ const CH001_SIGNALS: Signal[] = [
   {
     id: 'sig_008',
     channel_id: 'ch_001',
-    message_id: 5012,
+    message_id: '5012',
     signal_type: 'text',
     source: 'live',
     direction: 'BUY',
@@ -489,7 +489,7 @@ const CH001_SCREENSHOTS: ScreenshotClaim[] = [
   {
     id: 'ss_001',
     channel_id: 'ch_001',
-    message_id: 4850,
+    message_id: '4850',
     claimed_direction: 'BUY',
     claimed_open: 2298.00,
     claimed_close: 2318.00,
@@ -503,7 +503,7 @@ const CH001_SCREENSHOTS: ScreenshotClaim[] = [
   {
     id: 'ss_002',
     channel_id: 'ch_001',
-    message_id: 4870,
+    message_id: '4870',
     claimed_direction: 'BUY',
     claimed_open: 2280.00,
     claimed_close: 2310.00,
@@ -520,7 +520,7 @@ const CH001_NON_SIGNALS: NonSignalMessage[] = [
   {
     id: 'ns_001',
     channel_id: 'ch_001',
-    message_id: 5008,
+    message_id: '5008',
     message_type: 'non_signal',
     content: 'Gold is showing strong bullish momentum heading into US CPI. Stay patient and wait for our next signal.',
     posted_at: '2026-06-26T06:00:00Z',
@@ -530,9 +530,9 @@ const CH001_NON_SIGNALS: NonSignalMessage[] = [
   {
     id: 'ns_002',
     channel_id: 'ch_001',
-    message_id: 4998,
+    message_id: '4998',
     message_type: 'non_signal',
-    content: 'Weekly outlook: support at 2290–2295, resistance at 2350–2360. R:R favors buys off support.',
+    content: 'Weekly outlook: support at 2290â€“2295, resistance at 2350â€“2360. R:R favors buys off support.',
     posted_at: '2026-06-23T06:00:00Z',
     is_deleted: false,
     source: 'live',
@@ -540,7 +540,7 @@ const CH001_NON_SIGNALS: NonSignalMessage[] = [
   {
     id: 'ns_003',
     channel_id: 'ch_001',
-    message_id: 4901,
+    message_id: '4901',
     message_type: 'non_signal',
     content: 'No trade today. Markets are choppy ahead of Fed minutes.',
     posted_at: '2026-06-17T08:00:00Z',

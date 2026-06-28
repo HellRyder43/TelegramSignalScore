@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import { getMockChannelDetail } from '@/lib/mock-data'
+import { getChannelDetail } from '@/lib/supabase/queries'
 import { VerdictBadge } from '@/components/verdict-badge'
 import { TrustScoreGauge } from '@/components/trust-score-gauge'
 import { ScoreBreakdownPanel } from '@/components/score-breakdown'
@@ -15,7 +15,7 @@ export default async function ChannelDetailPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const detail = getMockChannelDetail(id)
+  const detail = await getChannelDetail(id)
 
   if (!detail) notFound()
 
@@ -91,7 +91,7 @@ export default async function ChannelDetailPage({
             </div>
           </div>
 
-          {/* Quick stats — 2 rows of 4 */}
+          {/* Quick stats */}
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-4">
             {[
               { label: 'Win Rate', value: fmtPct(channel.verified_win_rate), mono: true },
@@ -143,21 +143,21 @@ export default async function ChannelDetailPage({
           </div>
         </div>
 
-        {/* Two-column layout: breakdown + flags | signal history */}
+        {/* Two-column layout */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_1fr]">
-          {/* Left column */}
+          {/* Left: breakdown + flags */}
           <div className="flex flex-col gap-6">
             <ScoreBreakdownPanel breakdown={score_breakdown} />
             <RedFlagsPanel breakdown={score_breakdown} />
           </div>
 
-          {/* Right column: signal history */}
+          {/* Right: signal history */}
           <div>
             <h2 className="text-sm font-semibold text-foreground mb-4">Signal History</h2>
             <SignalHistory signals={signals} screenshots={screenshots} nonSignals={non_signals} />
             {signals.length === 0 && screenshots.length === 0 && non_signals.length === 0 && (
               <p className="text-sm text-muted-foreground mt-2">
-                No signal history in mock data for this channel yet. Only ch_001 (XAUUSD Elite Signals) has full detail data.
+                No signal history yet. Run the backfill script or wait for live signals to arrive.
               </p>
             )}
           </div>

@@ -54,7 +54,7 @@ export interface ScoreBreakdown {
 
 export interface MessageEdit {
   id: string
-  message_id: number
+  message_id: string   // messages.id (UUID)
   channel_id: string
   edit_number: number
   content_before: string
@@ -77,7 +77,7 @@ export interface SignalOutcome {
 export interface Signal {
   id: string
   channel_id: string
-  message_id: number
+  message_id: string   // messages.id (UUID)
   signal_type: SignalType
   source: SignalSource
   direction: SignalDirection
@@ -99,7 +99,7 @@ export interface Signal {
 export interface ScreenshotClaim {
   id: string
   channel_id: string
-  message_id: number
+  message_id: string   // messages.id (UUID)
   claimed_direction: SignalDirection | null
   claimed_open: number | null
   claimed_close: number | null
@@ -114,7 +114,7 @@ export interface ScreenshotClaim {
 export interface NonSignalMessage {
   id: string
   channel_id: string
-  message_id: number
+  message_id: string   // messages.id (UUID)
   message_type: 'non_signal' | 'image_deferred'
   content: string | null
   posted_at: string
