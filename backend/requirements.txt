@@ -23,6 +23,9 @@ pydantic-settings==2.7.0
 # ─── Anthropic vision (Phase 7) ──────────────────────────────────────────────
 anthropic==0.40.0
 
+# ─── Timezone data (required on Windows for zoneinfo; Linux/macOS have system tz) ──
+tzdata==2024.2
+
 # ─── Testing ─────────────────────────────────────────────────────────────────
 pytest==8.3.4
 pytest-asyncio==0.24.0
