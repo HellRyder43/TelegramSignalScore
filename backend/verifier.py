@@ -7,7 +7,7 @@ the real outcome of a signal by first-touch logic (SL vs TP).
 
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 import MetaTrader5 as mt5
@@ -52,7 +52,7 @@ def verify_signal(
     entry: float,
     stop_loss: float,
     take_profit: float | None,
-    posted_at: datetime,
+    posted_at: datetime | str,
     *,
     symbol: str | None = None,
 ) -> VerificationResult:
@@ -79,6 +79,15 @@ def verify_signal(
             entry + DEFAULT_TP_PIPS if direction == "BUY" else entry - DEFAULT_TP_PIPS
         )
     max_candles = VERIFICATION_WINDOW_HOURS * 60  # 2880 for 48 h
+
+    # Normalise posted_at to a naive UTC datetime.
+    # Supabase returns ISO strings ("2024-01-15T02:00:00+00:00"); MT5's C extension
+    # expects a datetime object and treats it as UTC. Passing a tz-aware object
+    # can cause TypeErrors on Windows, so we strip tzinfo after converting to UTC.
+    if isinstance(posted_at, str):
+        posted_at = datetime.fromisoformat(posted_at.replace("Z", "+00:00"))
+    if posted_at.tzinfo is not None:
+        posted_at = posted_at.astimezone(timezone.utc).replace(tzinfo=None)
 
     if not mt5.initialize():
         raise MT5NotConnectedError(str(mt5.last_error()))

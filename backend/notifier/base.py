@@ -26,3 +26,6 @@ class Notifier(ABC):
     @abstractmethod
     async def send_resolution_followup(self, alert_message_id: str, outcome: str, points: float | None) -> None:
         """Post the verified outcome under the original alert."""
+
+    async def close(self) -> None:
+        """Release resources. Override if the notifier holds persistent connections."""

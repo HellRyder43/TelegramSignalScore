@@ -1,5 +1,5 @@
 """
-Trust score calculator — Phase 3 implementation.
+Trust score calculator — Phase 3 + Phase 8 (AI intelligence).
 
 Aggregates verified outcomes and integrity events into a per-channel
 Trust Score (0–100) with a fully explainable breakdown.
@@ -21,6 +21,10 @@ from backend.config import (
     BACKFILL_SIGNAL_WEIGHT,
     ZONE_SIGNAL_WEIGHT,
     score_to_verdict,
+    AI_LOW_QUALITY_THRESHOLD,
+    AI_LOW_QUALITY_WEIGHT,
+    PENALTY_AI_SUSPICIOUS_EDIT,
+    AI_BEHAVIOR_PENALTY_MAX,
 )
 
 
@@ -54,6 +58,13 @@ class ScoreBreakdown:
     backfill_signal_count: int
     live_signal_count: int
 
+    # Phase 8 AI fields
+    retrospective_signal_count: int
+    low_quality_signal_count: int
+    suspicious_edit_count: int
+    ai_behavior_penalty: float
+    quality_weight_adjustment: float
+
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
@@ -72,7 +83,8 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
     """
     Compute the Trust Score for a channel from its Supabase data.
 
-    Queries signal_outcomes, message_edits, screenshot_claims, and messages.
+    Queries signal_outcomes, message_edits, screenshot_claims, messages,
+    signal_quality_assessments, and channel_ai_assessments.
     Returns a ScoreBreakdown with every component exposed for the dashboard.
     After computing, upserts score_breakdowns and updates channels.trust_score.
     """
@@ -101,10 +113,10 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
             .data
         )
 
-    # ── Q3: edit events ───────────────────────────────────────────────────────
+    # ── Q3: edit events (with AI columns) ────────────────────────────────────
     edit_rows = (
         db_client.table("message_edits")
-        .select("is_post_move_edit")
+        .select("is_post_move_edit, ai_intent, ai_suspicion_score")
         .eq("channel_id", channel_id)
         .execute()
         .data
@@ -131,20 +143,59 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
             .data
         )
 
+    # ── Q6: AI quality assessments ────────────────────────────────────────────
+    quality_map: dict[str, dict] = {}
+    if signal_ids:
+        qa_rows = (
+            db_client.table("signal_quality_assessments")
+            .select("signal_id, quality_score, is_retrospective")
+            .in_("signal_id", signal_ids)
+            .execute()
+            .data
+        )
+        quality_map = {r["signal_id"]: r for r in qa_rows}
+
+    # ── Q7: channel AI behavior assessment ───────────────────────────────────
+    ai_assessment_row: dict | None = (
+        db_client.table("channel_ai_assessments")
+        .select("fraud_risk_score")
+        .eq("channel_id", channel_id)
+        .maybe_single()
+        .execute()
+        .data
+    )
+
     # ── Aggregate outcome stats ───────────────────────────────────────────────
     wins = losses = ambiguous = 0
     effective_wins = effective_total = 0.0
     weighted_points: list[tuple[float, float]] = []  # (points, weight)
     rr_values: list[float] = []
     backfill_count = live_count = 0
+    retrospective_count = 0
+    low_quality_count = 0
+    quality_weight_adjustment_total = 0.0
 
     for row in outcome_rows:
         sig = signal_map.get(row["signal_id"])
         if not sig:
             continue
 
+        # Exclude retrospective signals from all stats
+        qa = quality_map.get(row["signal_id"])
+        if qa and qa.get("is_retrospective"):
+            retrospective_count += 1
+            continue
+
         outcome = row["outcome"]
         weight = _signal_weight(sig.get("signal_type", "text"), sig.get("source", "live"))
+
+        # Downweight low-quality signals
+        if qa:
+            qs = float(qa.get("quality_score") or 1.0)
+            if qs < AI_LOW_QUALITY_THRESHOLD:
+                quality_weight_adjustment_total += weight * (1.0 - AI_LOW_QUALITY_WEIGHT)
+                weight *= AI_LOW_QUALITY_WEIGHT
+                low_quality_count += 1
 
         if sig.get("source") == "backfill":
             backfill_count += 1
@@ -207,16 +258,42 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
     sample_weight = _clamp((total_verified - MIN_SIGNALS_FLOOR) / ramp, 0.0, 1.0)
     adjusted_performance = raw_performance * sample_weight
 
-    # ── Integrity component ───────────────────────────────────────────────────
+    # ── Integrity component (AI-aware) ────────────────────────────────────────
     edit_count = len(edit_rows)
     post_move_edit_count = sum(1 for e in edit_rows if e.get("is_post_move_edit"))
     delete_signal_count = len(del_rows)
     contradicted_count = sum(1 for s in shot_rows if s.get("verdict") == "contradicted")
 
-    integrity = WEIGHT_INTEGRITY
-    integrity -= post_move_edit_count * PENALTY_POST_MOVE_EDIT
+    integrity = float(WEIGHT_INTEGRITY)
+    total_edit_penalty = 0.0
+    suspicious_edit_count_val = 0
+
+    for e in edit_rows:
+        ai_score = e.get("ai_suspicion_score")
+        if ai_score is not None:
+            # Continuous penalty: 0.0 for typos, up to 5.0 for clear manipulation
+            per_edit = float(ai_score) * PENALTY_AI_SUSPICIOUS_EDIT
+            if float(ai_score) >= 0.5:
+                suspicious_edit_count_val += 1
+        elif e.get("is_post_move_edit"):
+            # Legacy fallback when AI analysis hasn't run for this edit
+            per_edit = PENALTY_POST_MOVE_EDIT
+            suspicious_edit_count_val += 1
+        else:
+            per_edit = 0.0
+        total_edit_penalty += per_edit
+
+    integrity -= total_edit_penalty
     integrity -= delete_signal_count * PENALTY_DELETED_SIGNAL
     integrity -= contradicted_count * PENALTY_CONTRADICTED_SCREENSHOT
+
+    # Channel-level AI fraud penalty
+    ai_behavior_penalty_val = 0.0
+    if ai_assessment_row:
+        fraud = float(ai_assessment_row.get("fraud_risk_score") or 0)
+        ai_behavior_penalty_val = _clamp(fraud * AI_BEHAVIOR_PENALTY_MAX, 0, AI_BEHAVIOR_PENALTY_MAX)
+        integrity -= ai_behavior_penalty_val
+
     integrity_score = max(0.0, integrity)
 
     # ── Final score ───────────────────────────────────────────────────────────
@@ -245,6 +322,11 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
         contradicted_screenshot_count=contradicted_count,
         backfill_signal_count=backfill_count,
         live_signal_count=live_count,
+        retrospective_signal_count=retrospective_count,
+        low_quality_signal_count=low_quality_count,
+        suspicious_edit_count=suspicious_edit_count_val,
+        ai_behavior_penalty=round(ai_behavior_penalty_val, 2),
+        quality_weight_adjustment=round(quality_weight_adjustment_total, 2),
     )
 
     # ── Persist to Supabase ───────────────────────────────────────────────────
@@ -274,6 +356,11 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
             "contradicted_screenshot_count": breakdown.contradicted_screenshot_count,
             "backfill_signal_count": breakdown.backfill_signal_count,
             "live_signal_count": breakdown.live_signal_count,
+            "retrospective_signal_count": breakdown.retrospective_signal_count,
+            "low_quality_signal_count": breakdown.low_quality_signal_count,
+            "suspicious_edit_count": breakdown.suspicious_edit_count,
+            "ai_behavior_penalty": breakdown.ai_behavior_penalty,
+            "quality_weight_adjustment": breakdown.quality_weight_adjustment,
         },
         on_conflict="channel_id",
     ).execute()

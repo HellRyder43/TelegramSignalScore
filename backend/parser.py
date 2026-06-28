@@ -181,11 +181,59 @@ def parse_text_signal(text: str) -> ParsedSignal | None:
     )
 
 
+_parser_logger = __import__("logging").getLogger(__name__)
+
+
+def parse_signal_with_ai_fallback(text: str) -> "tuple[ParsedSignal | None, str]":
+    """
+    Try regex parse first; if it returns None and AI is enabled, try Claude.
+
+    Returns (ParsedSignal | None, parse_method) where parse_method is
+    "regex" or "ai_fallback". Never raises.
+    """
+    from backend.config import ANTHROPIC_API_KEY, AI_PARSER_ENABLED
+
+    parsed = parse_text_signal(text)
+    if parsed is not None:
+        return parsed, "regex"
+
+    if not (AI_PARSER_ENABLED and ANTHROPIC_API_KEY):
+        return None, "regex"
+
+    try:
+        from backend.ai.signal_parser import ai_parse_signal
+        ai_parsed = ai_parse_signal(text)
+        return ai_parsed, ("ai_fallback" if ai_parsed is not None else "regex")
+    except Exception as exc:
+        _parser_logger.warning("AI signal parser failed (non-fatal): %s", exc)
+        return None, "regex"
+
+
 def classify_message(text: str | None, has_image: bool) -> str:
     """
     Classify a message into one of:
       text_signal | zone_image | mt5_screenshot | non_signal | image_deferred
 
-    Phase 4 implementation (classifier used by ingestor).
+    Rules:
+    - Text only: try parsing → text_signal or non_signal.
+    - Image + parseable caption: text_signal (we can still verify the text).
+    - Image + no parseable text + no Anthropic key: image_deferred.
+    - Image + no parseable text + Anthropic key present: zone_image (Phase 7 refines further).
     """
-    raise NotImplementedError("Implement in Phase 4")
+    from backend.config import ANTHROPIC_API_KEY
+
+    text_parseable = bool(text and parse_text_signal(text) is not None)
+
+    if not has_image:
+        return "text_signal" if text_parseable else "non_signal"
+
+    # Has image — but if the caption is already a parseable signal, classify as text_signal.
+    if text_parseable:
+        return "text_signal"
+
+    # Image with no parseable text.
+    if not ANTHROPIC_API_KEY:
+        return "image_deferred"
+
+    # Phase 7 will distinguish zone_image vs mt5_screenshot via vision API.
+    return "zone_image"

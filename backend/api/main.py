@@ -5,7 +5,14 @@ FastAPI application — Phase 3 implementation.
 from __future__ import annotations
 import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+    stream=sys.stdout,
+)
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,9 +23,15 @@ from backend.config import (
     SUPABASE_SERVICE_ROLE_KEY,
     VERIFY_INTERVAL_SECS,
     MT5_SYMBOL,
+    DISCORD_BOT_TOKEN,
+    DISCORD_CHANNEL_ID,
+    ANTHROPIC_API_KEY,
+    AI_CHANNEL_ANALYSIS_ENABLED,
+    AI_CHANNEL_ANALYSIS_MIN_SIGNALS,
 )
 from backend.verifier import verify_signal, MT5NotConnectedError, EntryNeverFilledError
 from backend.scorer import compute_trust_score
+from backend.notifier.base import Notifier
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +41,177 @@ def _make_db() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 
+# ─── AI channel analysis helpers ─────────────────────────────────────────────
+
+def _build_channel_summary(db: Client, channel_id: str, channel_row: dict) -> dict:
+    """Build the summary_data dict expected by analyze_channel_behavior()."""
+    # Total resolved signals and win rate
+    sig_rows = (
+        db.table("signals")
+        .select("id, source")
+        .eq("channel_id", channel_id)
+        .execute()
+        .data
+    )
+    signal_ids = [r["id"] for r in sig_rows]
+
+    outcome_rows: list[dict] = []
+    if signal_ids:
+        outcome_rows = (
+            db.table("signal_outcomes")
+            .select("signal_id, outcome, candles_walked")
+            .in_("signal_id", signal_ids)
+            .neq("outcome", "unresolved")
+            .execute()
+            .data
+        )
+
+    total_signals = len(outcome_rows)
+    wins = sum(1 for r in outcome_rows if r.get("outcome") == "win")
+    win_rate_pct = (wins / total_signals * 100) if total_signals else 0.0
+
+    # Timing: avg candles from post → entry fill (lower = earlier = less suspicious)
+    candles = [r["candles_walked"] for r in outcome_rows if r.get("candles_walked") is not None]
+    avg_candles = sum(candles) / len(candles) if candles else None
+    timing_summary = (
+        f"Avg {avg_candles:.1f} M1 candles from post to entry fill across {len(candles)} signals."
+        if avg_candles is not None
+        else "No timing data available."
+    )
+
+    # Quality flags
+    retro_count = low_q_count = 0
+    if signal_ids:
+        qa_rows = (
+            db.table("signal_quality_assessments")
+            .select("signal_id, quality_score, is_retrospective")
+            .in_("signal_id", signal_ids)
+            .execute()
+            .data
+        )
+        retro_count = sum(1 for r in qa_rows if r.get("is_retrospective"))
+        from backend.config import AI_LOW_QUALITY_THRESHOLD
+        low_q_count = sum(
+            1 for r in qa_rows
+            if not r.get("is_retrospective") and float(r.get("quality_score") or 1) < AI_LOW_QUALITY_THRESHOLD
+        )
+
+    # Edit pattern
+    edit_rows = (
+        db.table("message_edits")
+        .select("is_post_move_edit, ai_intent, ai_suspicion_score")
+        .eq("channel_id", channel_id)
+        .execute()
+        .data
+    )
+    post_move = sum(1 for e in edit_rows if e.get("is_post_move_edit"))
+    suspicious = sum(1 for e in edit_rows if (e.get("ai_suspicion_score") or 0) >= 0.5)
+    intent_counts: dict[str, int] = {}
+    for e in edit_rows:
+        intent = e.get("ai_intent") or "unknown"
+        intent_counts[intent] = intent_counts.get(intent, 0) + 1
+    edit_summary = (
+        f"{len(edit_rows)} edits total; {post_move} post-move; {suspicious} suspicious. "
+        f"Intents: {intent_counts}."
+    ) if edit_rows else "No edits recorded."
+
+    # Delete pattern
+    msg_rows = (
+        db.table("messages")
+        .select("id, is_deleted")
+        .eq("channel_id", channel_id)
+        .eq("message_type", "text_signal")
+        .execute()
+        .data
+    )
+    deleted_ids = {r["id"] for r in msg_rows if r.get("is_deleted")}
+    deleted_count = len(deleted_ids)
+    delete_summary = (
+        f"{deleted_count} signal(s) deleted out of {len(msg_rows)} text signals."
+        if msg_rows
+        else "No signal messages found."
+    )
+
+    return {
+        "total_signals": total_signals,
+        "win_rate_pct": win_rate_pct,
+        "retrospective_count": retro_count,
+        "low_quality_count": low_q_count,
+        "edit_summary": edit_summary,
+        "delete_summary": delete_summary,
+        "timing_summary": timing_summary,
+        "screenshot_confirmed": channel_row.get("screenshot_confirmed", 0),
+        "screenshot_contradicted": channel_row.get("screenshot_contradicted", 0),
+    }
+
+
+def _run_channel_analysis_for(db: Client, channel_ids: set[str]) -> int:
+    """
+    Run AI channel behavior analysis for the given channel UUIDs.
+    Skips if AI is disabled or API key missing.
+    Returns count of channels actually analyzed.
+    """
+    if not (AI_CHANNEL_ANALYSIS_ENABLED and ANTHROPIC_API_KEY):
+        return 0
+
+    from backend.ai.channel_analyzer import analyze_channel_behavior
+    from datetime import datetime, timezone
+
+    analyzed = 0
+    for channel_id in channel_ids:
+        try:
+            channel_row = (
+                db.table("channels")
+                .select("*")
+                .eq("id", channel_id)
+                .maybe_single()
+                .execute()
+                .data
+            )
+            if not channel_row:
+                continue
+
+            summary = _build_channel_summary(db, channel_id, channel_row)
+            if summary["total_signals"] < AI_CHANNEL_ANALYSIS_MIN_SIGNALS:
+                continue
+
+            result = analyze_channel_behavior(channel_row.get("name", channel_id), summary)
+            if result is None:
+                continue
+
+            db.table("channel_ai_assessments").upsert(
+                {
+                    "channel_id": channel_id,
+                    "fraud_risk_score": result.fraud_risk_score,
+                    "timing_score": result.timing_score,
+                    "edit_manipulation_score": result.edit_manipulation_score,
+                    "delete_manipulation_score": result.delete_manipulation_score,
+                    "key_findings": result.key_findings,
+                    "signals_analyzed": result.signals_analyzed,
+                    "assessed_at": datetime.now(timezone.utc).isoformat(),
+                },
+                on_conflict="channel_id",
+            ).execute()
+
+            analyzed += 1
+        except Exception as exc:
+            logger.warning("Channel analysis failed for %s (non-fatal): %s", channel_id, exc)
+
+    return analyzed
+
+
 # ─── Verification pass ────────────────────────────────────────────────────────
 
-def _run_verification_pass(db: Client) -> int:
-    """Resolve all unresolved signals. Returns number of signals processed."""
+ResolutionAlert = tuple[str, str, float | None]  # (discord_msg_id, outcome, points)
+
+
+def _run_verification_pass(db: Client) -> tuple[int, list[ResolutionAlert]]:
+    """
+    Resolve all unresolved signals.
+    Returns (signals_processed, resolution_alerts).
+    resolution_alerts is a list of (discord_message_id, outcome, points) for
+    signals that resolved and have a Discord alert — caller sends the follow-ups.
+    """
     rows = (
         db.table("signals")
         .select("id, channel_id, direction, entry, stop_loss, take_profit_1, posted_at")
@@ -41,9 +221,10 @@ def _run_verification_pass(db: Client) -> int:
     )
 
     if not rows:
-        return 0
+        return 0, []
 
     affected_channels: set[str] = set()
+    resolution_alerts: list[ResolutionAlert] = []
 
     for sig in rows:
         try:
@@ -73,12 +254,28 @@ def _run_verification_pass(db: Client) -> int:
 
             affected_channels.add(sig["channel_id"])
 
+            # Collect Discord alert ID for resolution follow-up
+            alert_rows = (
+                db.table("discord_alerts")
+                .select("discord_message_id")
+                .eq("signal_id", sig["id"])
+                .eq("alert_type", "signal")
+                .limit(1)
+                .execute()
+                .data
+            )
+            if alert_rows:
+                resolution_alerts.append((
+                    alert_rows[0]["discord_message_id"],
+                    result.outcome,
+                    result.points,
+                ))
+
         except EntryNeverFilledError:
-            # Entry never reached; leave as unresolved for now
             pass
         except MT5NotConnectedError as exc:
             logger.warning("MT5 not connected during verification pass: %s", exc)
-            break   # no point continuing if MT5 is down
+            break
         except Exception as exc:
             logger.error("Unexpected error verifying signal %s: %s", sig["id"], exc)
 
@@ -88,18 +285,30 @@ def _run_verification_pass(db: Client) -> int:
         except Exception as exc:
             logger.error("Score update failed for channel %s: %s", channel_id, exc)
 
-    return len(rows)
+    if affected_channels:
+        try:
+            _run_channel_analysis_for(db, affected_channels)
+        except Exception as exc:
+            logger.error("Channel AI analysis failed (non-fatal): %s", exc)
+
+    return len(rows), resolution_alerts
 
 
 # ─── Background scheduler ─────────────────────────────────────────────────────
 
-async def _verification_loop() -> None:
+async def _verification_loop(notifier: Notifier | None) -> None:
     db = _make_db()
     while True:
         try:
-            processed = await asyncio.to_thread(_run_verification_pass, db)
+            processed, resolution_alerts = await asyncio.to_thread(_run_verification_pass, db)
             if processed:
                 logger.info("Verification pass: processed %d signals", processed)
+            if notifier and resolution_alerts:
+                for discord_msg_id, outcome, points in resolution_alerts:
+                    try:
+                        await notifier.send_resolution_followup(discord_msg_id, outcome, points)
+                    except Exception as exc:
+                        logger.warning("Resolution follow-up failed (non-fatal): %s", exc)
         except Exception as exc:
             logger.error("Verification loop error: %s", exc)
         await asyncio.sleep(VERIFY_INTERVAL_SECS)
@@ -107,13 +316,23 @@ async def _verification_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(_verification_loop())
+    notifier: Notifier | None = None
+    if DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID:
+        from backend.notifier.discord_bot import DiscordNotifier
+        notifier = DiscordNotifier(_make_db())
+        logger.info("Discord notifier initialized")
+    else:
+        logger.info("DISCORD_BOT_TOKEN / DISCORD_CHANNEL_ID not set — resolution alerts disabled")
+
+    task = asyncio.create_task(_verification_loop(notifier))
     yield
     task.cancel()
     try:
         await task
     except asyncio.CancelledError:
         pass
+    if notifier:
+        await notifier.close()
 
 
 # ─── App ──────────────────────────────────────────────────────────────────────
@@ -224,3 +443,11 @@ async def trigger_verification(background_tasks: BackgroundTasks) -> dict:
     db = _make_db()
     background_tasks.add_task(_run_verification_pass, db)
     return {"queued": True}
+
+
+@app.post("/ai/assess/channel/{channel_id}")
+async def trigger_channel_assessment(channel_id: str) -> dict:
+    """Manually trigger AI behavior analysis for a single channel."""
+    db = _make_db()
+    count = await asyncio.to_thread(_run_channel_analysis_for, db, {channel_id})
+    return {"analyzed": count}
