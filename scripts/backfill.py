@@ -6,8 +6,13 @@ reduced weight in the Trust Score (see BACKFILL_SIGNAL_WEIGHT in config.py).
 Re-running is safe: messages already in the database are skipped.
 
 Usage:
-    python -m scripts.backfill --channel -1001234567890 [--limit 500]
+    python -m scripts.backfill --channel -1001234567890,-1009876543210 [--limit 500]
+    python -m scripts.backfill --all [--limit 500]   # every TRACKED_CHANNEL_IDS channel
     python -m scripts.backfill --channel @channelUsername [--limit 200]
+
+Multiple channels are backfilled on a single Telegram connection (one connect /
+disconnect), which avoids the rapid-reconnect hang that launching a separate
+process per channel can cause.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from backend.config import (
     TG_API_ID,
     TG_API_HASH,
     TG_BACKFILL_SESSION_NAME,
+    TRACKED_CHANNEL_IDS,
     SUPABASE_URL,
     SUPABASE_SERVICE_ROLE_KEY,
 )
@@ -101,43 +107,12 @@ def _upsert_channel(
     return result.data[0]
 
 
-async def backfill(channel_ref: str, limit: int) -> None:
-    if not TG_API_ID or not TG_API_HASH:
-        print("Error: TG_API_ID and TG_API_HASH must be set in .env")
-        sys.exit(1)
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        print("Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env")
-        sys.exit(1)
+async def _backfill_channel(client, db, channel_ref: str, limit: int) -> None:
+    """Backfill one channel on an already-connected client.
 
-    client = TelegramClient(_SESSION_PATH, TG_API_ID, TG_API_HASH)
-
-    print("Connecting to Telegram... ", end="", flush=True)
-    # Time-box the network connect so a stall can never hang silently. The
-    # interactive login below is deliberately NOT timed, so one-time code entry
-    # isn't cut off.
-    try:
-        await asyncio.wait_for(client.connect(), timeout=30)
-    except asyncio.TimeoutError:
-        print("TIMED OUT")
-        print(
-            "\nThe backfill could not connect within 30 seconds.\n"
-            "Backfill now uses its own session, so this is most likely a network "
-            "issue. Check your internet connection and try again."
-        )
-        sys.exit(1)
-    except Exception as exc:
-        print(f"FAILED — {exc}")
-        print("\nCould not connect to Telegram. Check your internet connection and try again.")
-        sys.exit(1)
-
-    if not await client.is_user_authorized():
-        print("\nFirst-time backfill login (this uses a separate session, one time only).")
-        print("Telegram will ask for your phone number and a login code.\n")
-        await client.start()  # interactive; connection already established above
-    print("connected.")
-
-    db = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-
+    Never raises for a single bad channel — it prints the problem and returns so
+    the remaining channels in a multi-channel run still get processed.
+    """
     # Resolve channel_ref: accept numeric ID or @username
     try:
         ref: int | str = int(channel_ref)
@@ -147,15 +122,13 @@ async def backfill(channel_ref: str, limit: int) -> None:
     try:
         entity = await asyncio.wait_for(client.get_entity(ref), timeout=30)
     except asyncio.TimeoutError:
-        print(f"\nTimed out resolving channel '{channel_ref}'.")
-        print("Telegram may be rate-limiting the request. Wait a minute and try again.")
-        await client.disconnect()
-        sys.exit(1)
+        print(f"\nTimed out resolving channel '{channel_ref}' — skipping it.")
+        print("Telegram may be rate-limiting; try this channel again later.")
+        return
     except Exception as exc:
-        print(f"\nError resolving channel '{channel_ref}': {exc}")
+        print(f"\nError resolving channel '{channel_ref}': {exc} — skipping it.")
         print("Make sure the channel ID is correct and your account is a member.")
-        await client.disconnect()
-        sys.exit(1)
+        return
 
     tg_id: int = entity.id
     name: str = getattr(entity, "title", None) or str(tg_id)
@@ -259,7 +232,7 @@ async def backfill(channel_ref: str, limit: int) -> None:
             {"last_signal_at": last_signal_at.isoformat()}
         ).eq("id", channel_id).execute()
 
-    print(f"\nDone.")
+    print(f"\nDone with '{name}'.")
     print(f"  Messages inserted : {inserted}")
     print(f"  Messages skipped  : {skipped}  (already in DB — safe to ignore)")
     print(f"  Signals parsed    : {signal_count}")
@@ -269,7 +242,58 @@ async def backfill(channel_ref: str, limit: int) -> None:
             "  rather than text. Run reprocess_images after backfill to classify those."
         )
 
-    await client.disconnect()
+
+async def run(channel_refs: list[str], limit: int) -> None:
+    """Connect once, back-fill every channel, disconnect once.
+
+    Doing all channels on a single connection avoids the rapid-reconnect hang you
+    get from launching a separate process per channel (the same auth key being
+    reused before the previous connection has been released).
+    """
+    if not TG_API_ID or not TG_API_HASH:
+        print("Error: TG_API_ID and TG_API_HASH must be set in .env")
+        sys.exit(1)
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        print("Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env")
+        sys.exit(1)
+
+    client = TelegramClient(_SESSION_PATH, TG_API_ID, TG_API_HASH)
+
+    print("Connecting to Telegram... ", end="", flush=True)
+    # Time-box the network connect so a stall can never hang silently. The
+    # interactive login below is deliberately NOT timed, so one-time code entry
+    # isn't cut off.
+    try:
+        await asyncio.wait_for(client.connect(), timeout=30)
+    except asyncio.TimeoutError:
+        print("TIMED OUT")
+        print(
+            "\nThe backfill could not connect within 30 seconds.\n"
+            "Backfill uses its own session, so this is most likely a network "
+            "issue. Check your internet connection and try again."
+        )
+        sys.exit(1)
+    except Exception as exc:
+        print(f"FAILED — {exc}")
+        print("\nCould not connect to Telegram. Check your internet connection and try again.")
+        sys.exit(1)
+
+    if not await client.is_user_authorized():
+        print("\nFirst-time backfill login (this uses a separate session, one time only).")
+        print("Telegram will ask for your phone number and a login code.\n")
+        await client.start()  # interactive; connection already established above
+    print("connected.")
+
+    db = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+    try:
+        for i, channel_ref in enumerate(channel_refs, 1):
+            print(f"\n===== Channel {i}/{len(channel_refs)}: {channel_ref} =====")
+            await _backfill_channel(client, db, channel_ref, limit)
+    finally:
+        await client.disconnect()
+
+    print("\nAll channels processed.")
 
 
 if __name__ == "__main__":
@@ -283,19 +307,35 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--channel",
-        required=True,
-        help="Channel ID (e.g. -1001234567890) or @username",
+        help="Channel ID(s) or @username(s), comma-separated "
+             "(e.g. -1001234567890,-1009876543210). Omit if using --all.",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Back-fill every channel in TRACKED_CHANNEL_IDS (from .env).",
     )
     parser.add_argument(
         "--limit",
         type=int,
         default=500,
-        help="Maximum number of messages to fetch (default: 500)",
+        help="Maximum number of messages to fetch per channel (default: 500)",
     )
     args = parser.parse_args()
 
+    if args.all:
+        channel_refs = [str(c) for c in TRACKED_CHANNEL_IDS]
+        if not channel_refs:
+            print("Error: --all was given but TRACKED_CHANNEL_IDS is empty in .env.")
+            sys.exit(1)
+    elif args.channel:
+        channel_refs = [c.strip() for c in args.channel.split(",") if c.strip()]
+    else:
+        print("Error: provide --channel <ids> (comma-separated) or --all.")
+        sys.exit(1)
+
     try:
-        asyncio.run(backfill(args.channel, args.limit))
+        asyncio.run(run(channel_refs, args.limit))
     except KeyboardInterrupt:
         print(
             "\n\nBackfill stopped. Nothing was corrupted.\n"

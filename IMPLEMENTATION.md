@@ -593,18 +593,21 @@ The dashboard will show an empty table for now — that's normal. You haven't lo
 
 > **First-run login (one time only):** backfill uses its **own** Telegram session, separate from the live listener in Window B. Telegram cannot share one session across two running processes — if backfill reused the listener's session it would hang forever at "Connecting to Telegram". So the **very first** backfill command will pause and ask for your phone number and a login code (same as step 11c). Enter them once; a separate `xau_signal_bot_backfill.session` file is created and you won't be asked again. Because it's a separate session, **backfill is safe to run while the listener (Window B) is up** — no need to stop it.
 
-In **Window D**, run these commands. Replace the channel IDs with the ones you found in step 11c. **Run one command per channel.**
+In **Window D**, run **one** command — it backfills every channel on a single connection. Pass all IDs comma-separated, or use `--all` to read them from `TRACKED_CHANNEL_IDS` in `.env`.
 
 ```powershell
 cd D:\AmirForex\TelegramSignalScore\backend
 .\.venv\Scripts\Activate.ps1
 cd ..
 
-# Run for each channel — replace the ID each time:
-python -m scripts.backfill --channel -1001234567890 --limit 500
-python -m scripts.backfill --channel -1009876543210 --limit 500
-python -m scripts.backfill --channel -1007777777777 --limit 500
+# All channels in one run (recommended) — uses TRACKED_CHANNEL_IDS from .env:
+python -m scripts.backfill --all --limit 500
+
+# ...or list specific IDs, comma-separated, no spaces:
+python -m scripts.backfill --channel -1001234567890,-1009876543210,-1007777777777 --limit 500
 ```
+
+> **Why one command, not one per channel:** backfill connects to Telegram once and loops through every channel on that connection. Launching a *separate* command per channel reconnects the same session within seconds each time, which can stall at "Connecting to Telegram". The single run avoids that.
 
 **What `--limit 500` means:** fetch the last 500 messages from that channel. For channels that post multiple signals per day, 500 messages may only cover a few weeks. If you want more history, increase the number:
 - `--limit 1000` → roughly 1–3 months depending on how active the channel is
@@ -620,7 +623,7 @@ Backfilling channel -1001234567890 (Gold Signals VIP)...
 Done. 487 inserted, 13 skipped, 94 signals found.
 ```
 
-Wait for each one to finish before running the next. It typically takes 1–5 minutes per channel depending on message count and your internet speed.
+It typically takes 1–5 minutes per channel; the single run processes them back-to-back, so just let it finish.
 
 ✅ **Done when:** all your channels have been backfilled and the script prints "Done" for each one.
 
