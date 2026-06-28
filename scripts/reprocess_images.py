@@ -35,6 +35,7 @@ from backend.config import (
     MT5_SYMBOL,
     ANTHROPIC_API_KEY,
 )
+from backend.db_utils import maybe_one
 
 logging.basicConfig(
     level=logging.INFO,
@@ -187,13 +188,10 @@ async def _reprocess_message(
             }).execute()
 
             # Update channel screenshot counts
-            ch = (
+            ch = maybe_one(
                 db.table("channels")
                 .select("screenshot_confirmed, screenshot_contradicted")
                 .eq("id", channel_row["id"])
-                .maybe_single()
-                .execute()
-                .data
             )
             if ch:
                 if verdict == "confirmed":

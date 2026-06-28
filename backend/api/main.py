@@ -33,6 +33,7 @@ from backend.config import (
 from backend.verifier import verify_signal, MT5NotConnectedError, EntryNeverFilledError
 from backend.scorer import compute_trust_score
 from backend.notifier.base import Notifier
+from backend.db_utils import maybe_one
 
 logger = logging.getLogger(__name__)
 
@@ -166,26 +167,20 @@ def _run_channel_analysis_for(db: Client, channel_ids: set[str], force: bool = F
     analyzed = 0
     for channel_id in channel_ids:
         try:
-            channel_row = (
+            channel_row = maybe_one(
                 db.table("channels")
                 .select("*")
                 .eq("id", channel_id)
-                .maybe_single()
-                .execute()
-                .data
             )
             if not channel_row:
                 continue
 
             # Cost guard: skip channels assessed very recently unless forced.
             if not force:
-                prior = (
+                prior = maybe_one(
                     db.table("channel_ai_assessments")
                     .select("assessed_at")
                     .eq("channel_id", channel_id)
-                    .maybe_single()
-                    .execute()
-                    .data
                 )
                 if prior and prior.get("assessed_at"):
                     last = datetime.fromisoformat(prior["assessed_at"].replace("Z", "+00:00"))
@@ -405,13 +400,10 @@ async def get_channel(channel_id: str) -> dict:
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
 
-    breakdown = (
+    breakdown = maybe_one(
         db.table("score_breakdowns")
         .select("*")
         .eq("channel_id", channel_id)
-        .maybe_single()
-        .execute()
-        .data
     )
 
     return {"channel": channel, "score_breakdown": breakdown}
@@ -425,13 +417,10 @@ async def get_channel_signals(
 ) -> list[dict]:
     db = _make_db()
 
-    channel_check = (
+    channel_check = maybe_one(
         db.table("channels")
         .select("id")
         .eq("id", channel_id)
-        .maybe_single()
-        .execute()
-        .data
     )
     if not channel_check:
         raise HTTPException(status_code=404, detail="Channel not found")

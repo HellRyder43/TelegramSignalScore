@@ -42,6 +42,7 @@ from backend.config import (
 )
 from backend.parser import classify_message, parse_text_signal, parse_signal_with_ai_fallback
 from backend.notifier.base import Notifier
+from backend.db_utils import maybe_one
 
 load_dotenv()
 
@@ -149,13 +150,10 @@ def _detect_post_move_edit(
 
 def _db_ensure_channel(tg_id: int, name: str, username: str | None, member_count: int | None) -> dict | None:
     assert _db is not None
-    existing = (
+    existing = maybe_one(
         _db.table("channels")
         .select("*")
         .eq("telegram_id", tg_id)
-        .maybe_single()
-        .execute()
-        .data
     )
     if existing:
         return existing
@@ -180,13 +178,10 @@ def _db_resolve_channel_uuid(tg_id: int) -> str | None:
     cached = _channel_cache.get(tg_id)
     if cached:
         return cached["id"]
-    row = (
+    row = maybe_one(
         _db.table("channels")
         .select("*")
         .eq("telegram_id", tg_id)
-        .maybe_single()
-        .execute()
-        .data
     )
     if row:
         _channel_cache[tg_id] = row
@@ -203,14 +198,11 @@ def _db_get_or_insert_message(
     posted_at: datetime,
 ) -> dict | None:
     assert _db is not None
-    existing = (
+    existing = maybe_one(
         _db.table("messages")
         .select("id, content, channel_id, message_type")
         .eq("channel_id", channel_id)
         .eq("telegram_message_id", tg_msg_id)
-        .maybe_single()
-        .execute()
-        .data
     )
     if existing:
         return existing
@@ -245,13 +237,10 @@ def _db_insert_signal(
     # None here makes the caller skip the alert/scoring path (same as backfill's
     # sig_existing check). For a hard guarantee, a UNIQUE(message_id) constraint
     # on signals would also catch the rare concurrent-event race.
-    existing = (
+    existing = maybe_one(
         _db.table("signals")
         .select("id")
         .eq("message_id", message_id)
-        .maybe_single()
-        .execute()
-        .data
     )
     if existing:
         logger.info("Signal already exists for message %s — skipping duplicate insert", message_id)
@@ -315,13 +304,10 @@ def _db_insert_screenshot_claim(
 
 def _db_update_screenshot_counts(channel_id: str, verdict: str) -> None:
     assert _db is not None
-    ch = (
+    ch = maybe_one(
         _db.table("channels")
         .select("screenshot_confirmed, screenshot_contradicted")
         .eq("id", channel_id)
-        .maybe_single()
-        .execute()
-        .data
     )
     if ch is None:
         return
@@ -415,7 +401,7 @@ def _db_record_edit(
     }).execute()
 
     # Increment channel edit_count
-    ch = _db.table("channels").select("edit_count").eq("id", channel_id).maybe_single().execute().data
+    ch = maybe_one(_db.table("channels").select("edit_count").eq("id", channel_id))
     if ch is not None:
         _db.table("channels").update({"edit_count": ch["edit_count"] + 1}).eq("id", channel_id).execute()
 
@@ -469,7 +455,7 @@ def _db_mark_deleted(tg_msg_id: int, channel_uuid: str) -> list[str]:
 
         if row["message_type"] == "text_signal":
             signal_message_ids.append(row["id"])
-            ch = _db.table("channels").select("delete_count").eq("id", row["channel_id"]).maybe_single().execute().data
+            ch = maybe_one(_db.table("channels").select("delete_count").eq("id", row["channel_id"]))
             if ch is not None:
                 _db.table("channels").update({"delete_count": ch["delete_count"] + 1}).eq("id", row["channel_id"]).execute()
 

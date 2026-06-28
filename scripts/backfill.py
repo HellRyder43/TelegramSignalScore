@@ -41,6 +41,7 @@ from backend.config import (
     SUPABASE_SERVICE_ROLE_KEY,
 )
 from backend.parser import classify_message, parse_text_signal
+from backend.db_utils import maybe_one
 
 # Resolve session file relative to the project root (two levels up from this
 # script), so it is always found regardless of which directory you run from.
@@ -82,13 +83,10 @@ def _upsert_channel(
     username: str | None,
     member_count: int | None,
 ) -> dict:
-    existing = (
+    existing = maybe_one(
         db.table("channels")
         .select("*")
         .eq("telegram_id", tg_id)
-        .maybe_single()
-        .execute()
-        .data
     )
     if existing:
         return existing
@@ -189,14 +187,11 @@ async def backfill(channel_ref: str, limit: int) -> None:
         msg_type = classify_message(text, has_img)
 
         # Idempotent: skip if already stored
-        existing = (
+        existing = maybe_one(
             db.table("messages")
             .select("id")
             .eq("channel_id", channel_id)
             .eq("telegram_message_id", message.id)
-            .maybe_single()
-            .execute()
-            .data
         )
         if existing:
             skipped += 1
@@ -223,13 +218,10 @@ async def backfill(channel_ref: str, limit: int) -> None:
             if msg_type == "text_signal" and text:
                 parsed = parse_text_signal(text)
                 if parsed:
-                    sig_existing = (
+                    sig_existing = maybe_one(
                         db.table("signals")
                         .select("id")
                         .eq("message_id", msg_row["id"])
-                        .maybe_single()
-                        .execute()
-                        .data
                     )
                     if not sig_existing:
                         db.table("signals").insert({

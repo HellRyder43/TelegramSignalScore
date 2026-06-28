@@ -26,6 +26,7 @@ from backend.config import (
     PENALTY_AI_SUSPICIOUS_EDIT,
     AI_BEHAVIOR_PENALTY_MAX,
 )
+from backend.db_utils import maybe_one
 
 
 @dataclass
@@ -156,13 +157,10 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
         quality_map = {r["signal_id"]: r for r in qa_rows}
 
     # ── Q7: channel AI behavior assessment ───────────────────────────────────
-    ai_assessment_row: dict | None = (
+    ai_assessment_row: dict | None = maybe_one(
         db_client.table("channel_ai_assessments")
         .select("fraud_risk_score")
         .eq("channel_id", channel_id)
-        .maybe_single()
-        .execute()
-        .data
     )
 
     # ── Aggregate outcome stats ───────────────────────────────────────────────
