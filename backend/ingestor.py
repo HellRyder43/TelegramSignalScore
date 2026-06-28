@@ -224,6 +224,24 @@ def _db_insert_signal(
     parse_method: str = "regex",
 ) -> dict | None:
     assert _db is not None
+    # Idempotency guard: a live NewMessage event can be redelivered (reconnect,
+    # gap-fill). The signals table has no UNIQUE(message_id), so without this a
+    # redelivery would create a second signal row for the same post — double-
+    # counting it in the trust score and re-firing the Discord alert. Returning
+    # None here makes the caller skip the alert/scoring path (same as backfill's
+    # sig_existing check). For a hard guarantee, a UNIQUE(message_id) constraint
+    # on signals would also catch the rare concurrent-event race.
+    existing = (
+        _db.table("signals")
+        .select("id")
+        .eq("message_id", message_id)
+        .maybe_single()
+        .execute()
+        .data
+    )
+    if existing:
+        logger.info("Signal already exists for message %s — skipping duplicate insert", message_id)
+        return None
     result = (
         _db.table("signals")
         .insert({
