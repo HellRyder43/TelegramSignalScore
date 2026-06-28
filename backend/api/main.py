@@ -28,6 +28,7 @@ from backend.config import (
     ANTHROPIC_API_KEY,
     AI_CHANNEL_ANALYSIS_ENABLED,
     AI_CHANNEL_ANALYSIS_MIN_SIGNALS,
+    AI_CHANNEL_ANALYSIS_MIN_INTERVAL_SECS,
 )
 from backend.verifier import verify_signal, MT5NotConnectedError, EntryNeverFilledError
 from backend.scorer import compute_trust_score
@@ -145,11 +146,16 @@ def _build_channel_summary(db: Client, channel_id: str, channel_row: dict) -> di
     }
 
 
-def _run_channel_analysis_for(db: Client, channel_ids: set[str]) -> int:
+def _run_channel_analysis_for(db: Client, channel_ids: set[str], force: bool = False) -> int:
     """
     Run AI channel behavior analysis for the given channel UUIDs.
     Skips if AI is disabled or API key missing.
     Returns count of channels actually analyzed.
+
+    Each run costs a Claude call. The automatic verification loop calls this with
+    force=False, so a channel assessed within AI_CHANNEL_ANALYSIS_MIN_INTERVAL_SECS
+    is skipped — otherwise every 5-minute pass that resolves a signal would re-bill
+    Claude for the same channel. Manual triggers pass force=True to override.
     """
     if not (AI_CHANNEL_ANALYSIS_ENABLED and ANTHROPIC_API_KEY):
         return 0
@@ -170,6 +176,24 @@ def _run_channel_analysis_for(db: Client, channel_ids: set[str]) -> int:
             )
             if not channel_row:
                 continue
+
+            # Cost guard: skip channels assessed very recently unless forced.
+            if not force:
+                prior = (
+                    db.table("channel_ai_assessments")
+                    .select("assessed_at")
+                    .eq("channel_id", channel_id)
+                    .maybe_single()
+                    .execute()
+                    .data
+                )
+                if prior and prior.get("assessed_at"):
+                    last = datetime.fromisoformat(prior["assessed_at"].replace("Z", "+00:00"))
+                    if last.tzinfo is None:
+                        last = last.replace(tzinfo=timezone.utc)
+                    age = (datetime.now(timezone.utc) - last).total_seconds()
+                    if age < AI_CHANNEL_ANALYSIS_MIN_INTERVAL_SECS:
+                        continue
 
             summary = _build_channel_summary(db, channel_id, channel_row)
             if summary["total_signals"] < AI_CHANNEL_ANALYSIS_MIN_SIGNALS:
@@ -449,5 +473,7 @@ async def trigger_verification(background_tasks: BackgroundTasks) -> dict:
 async def trigger_channel_assessment(channel_id: str) -> dict:
     """Manually trigger AI behavior analysis for a single channel."""
     db = _make_db()
-    count = await asyncio.to_thread(_run_channel_analysis_for, db, {channel_id})
+    # force=True: a manual trigger should always produce a fresh assessment,
+    # bypassing the automatic-loop recency guard.
+    count = await asyncio.to_thread(_run_channel_analysis_for, db, {channel_id}, True)
     return {"analyzed": count}

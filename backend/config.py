@@ -154,3 +154,9 @@ AI_BEHAVIOR_PENALTY_MAX: float = float(os.getenv("AI_BEHAVIOR_PENALTY_MAX", "10.
 AI_CHANNEL_ANALYSIS_MIN_SIGNALS: int = int(
     os.getenv("AI_CHANNEL_ANALYSIS_MIN_SIGNALS", str(MIN_SIGNALS_FLOOR))
 )
+# Minimum seconds between *automatic* re-assessments of the same channel, so the
+# 5-minute verification loop can't repeatedly re-bill Claude for one channel.
+# Manual /ai/assess/channel calls bypass this (force=True).
+AI_CHANNEL_ANALYSIS_MIN_INTERVAL_SECS: int = int(
+    os.getenv("AI_CHANNEL_ANALYSIS_MIN_INTERVAL_SECS", "3600")
+)

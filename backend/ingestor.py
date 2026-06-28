@@ -153,6 +153,33 @@ def _db_ensure_channel(tg_id: int, name: str, username: str | None, member_count
     return result.data[0] if result.data else None
 
 
+def _db_resolve_channel_uuid(tg_id: int) -> str | None:
+    """Resolve a Telegram channel ID to our internal channel UUID.
+
+    Checks the in-memory cache first, then falls back to a DB lookup (caching the
+    result). Returns None if we have never recorded this channel — callers must
+    treat None as "cannot scope safely" and skip, never run an unscoped query.
+    Telegram message IDs are unique only *within* a channel, so an unscoped
+    edit/delete could corrupt a different channel's data and trust score.
+    """
+    assert _db is not None
+    cached = _channel_cache.get(tg_id)
+    if cached:
+        return cached["id"]
+    row = (
+        _db.table("channels")
+        .select("*")
+        .eq("telegram_id", tg_id)
+        .maybe_single()
+        .execute()
+        .data
+    )
+    if row:
+        _channel_cache[tg_id] = row
+        return row["id"]
+    return None
+
+
 def _db_get_or_insert_message(
     channel_id: str,
     tg_msg_id: int,
@@ -276,16 +303,21 @@ def _db_update_screenshot_counts(channel_id: str, verdict: str) -> None:
         ).eq("id", channel_id).execute()
 
 
-def _db_lookup_message_for_edit(tg_msg_id: int) -> tuple[dict | None, str, dict | None]:
+def _db_lookup_message_for_edit(tg_msg_id: int, channel_uuid: str) -> tuple[dict | None, str, dict | None]:
     """
     Returns (msg_row, content_before, signal_row_or_None).
     content_before is the text as of the last known state (original or last edit).
+
+    Scoped by channel_uuid: telegram_message_id is unique only within a channel
+    (messages has UNIQUE(channel_id, telegram_message_id)), so an unscoped lookup
+    could match and attribute the edit to a different channel's message.
     """
     assert _db is not None
     rows = (
         _db.table("messages")
         .select("id, content, channel_id, message_type")
         .eq("telegram_message_id", tg_msg_id)
+        .eq("channel_id", channel_uuid)
         .execute()
         .data
     )
@@ -380,13 +412,24 @@ def _db_update_edit_ai_analysis(message_id: str, edit_number: int, analysis: Any
     }).eq("message_id", message_id).eq("edit_number", edit_number).execute()
 
 
-def _db_mark_deleted(tg_msg_id: int, channel_uuid: str | None) -> list[str]:
-    """Mark messages deleted. Returns UUIDs of messages that were text_signals (for Discord follow-ups)."""
+def _db_mark_deleted(tg_msg_id: int, channel_uuid: str) -> list[str]:
+    """Mark messages deleted within a specific channel. Returns UUIDs of messages
+    that were text_signals (for Discord follow-ups).
+
+    channel_uuid is required and the query is always channel-scoped: Telegram
+    message IDs are unique only within a channel, so an unscoped match could mark
+    a same-numbered message in a different channel as deleted and unjustly inflate
+    that channel's delete_count / lower its trust score.
+    """
     assert _db is not None
-    q = _db.table("messages").select("id, channel_id, message_type").eq("telegram_message_id", tg_msg_id)
-    if channel_uuid:
-        q = q.eq("channel_id", channel_uuid)
-    rows = q.execute().data
+    rows = (
+        _db.table("messages")
+        .select("id, channel_id, message_type")
+        .eq("telegram_message_id", tg_msg_id)
+        .eq("channel_id", channel_uuid)
+        .execute()
+        .data
+    )
 
     signal_message_ids: list[str] = []
     for row in rows:
@@ -568,8 +611,13 @@ async def _on_edited_message(event: events.MessageEdited.Event) -> None:
     if edited_at.tzinfo is None:
         edited_at = edited_at.replace(tzinfo=timezone.utc)
 
+    channel_uuid = await asyncio.to_thread(_db_resolve_channel_uuid, tg_id)
+    if not channel_uuid:
+        logger.warning("[edit] unknown channel tg=%s msg=%s — skipping (cannot scope safely)", tg_id, msg.id)
+        return
+
     msg_row, content_before, sig = await asyncio.to_thread(
-        _db_lookup_message_for_edit, msg.id
+        _db_lookup_message_for_edit, msg.id, channel_uuid
     )
     if not msg_row:
         return  # Not a tracked message; ignore
@@ -622,13 +670,21 @@ async def _on_deleted_message(event: events.MessageDeleted.Event) -> None:
         return
 
     chat_id: int | None = getattr(event, "chat_id", None)
-    if TRACKED_CHANNEL_IDS and chat_id is not None and chat_id not in TRACKED_CHANNEL_IDS:
+    if chat_id is None:
+        # Without a chat_id we cannot tell which channel these IDs belong to, and
+        # Telegram message IDs are not globally unique — an unscoped delete could
+        # wrongly flag another channel's messages. Skip rather than corrupt data.
+        logger.warning("[delete] event has no chat_id — skipping %d id(s)", len(event.deleted_ids))
+        return
+    if TRACKED_CHANNEL_IDS and chat_id not in TRACKED_CHANNEL_IDS:
         return
 
-    # Resolve our UUID for this channel if cached
-    channel_uuid: str | None = None
-    if chat_id is not None and chat_id in _channel_cache:
-        channel_uuid = _channel_cache[chat_id]["id"]
+    # Resolve our UUID for this channel (cache, then DB). Bail if unknown so the
+    # delete is always channel-scoped.
+    channel_uuid = await asyncio.to_thread(_db_resolve_channel_uuid, chat_id)
+    if not channel_uuid:
+        logger.warning("[delete] unknown channel tg=%s — skipping %d id(s)", chat_id, len(event.deleted_ids))
+        return
 
     for tg_msg_id in event.deleted_ids:
         signal_msg_ids = await asyncio.to_thread(_db_mark_deleted, tg_msg_id, channel_uuid)

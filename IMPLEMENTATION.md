@@ -516,16 +516,18 @@ In **Window A**, run:
 cd D:\AmirForex\TelegramSignalScore\backend
 .\.venv\Scripts\Activate.ps1
 cd ..
-uvicorn backend.api.main:app --host 0.0.0.0 --port 8000
+uvicorn backend.api.main:app --host 127.0.0.1 --port 8000
 ```
 
 Wait for this output (takes a few seconds):
 
 ```
 INFO:     Started server process [12345]
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 INFO      backend.api.main — Discord notifier initialized
 ```
+
+> **Why `127.0.0.1` and not `0.0.0.0`?** The API has no authentication and uses the Supabase service-role key, and its `/verify/run` and `/ai/assess/channel` endpoints trigger MT5 work and paid Claude calls. Binding to `127.0.0.1` keeps it reachable only from this machine (your dashboard and `curl` commands all use localhost), so nothing on your network can read your data or run up Anthropic charges. Only change this if you deliberately put it behind an authenticated reverse proxy.
 
 > The `Discord notifier initialized` line only appears if `DISCORD_BOT_TOKEN` is set in `.env`. If you see it, Discord alerts are working. If you don't see it, double-check your Discord token in `.env`.
 
@@ -767,10 +769,10 @@ Make sure **MetaTrader 5** is open and logged into your RoboForex account with a
 cd D:\AmirForex\TelegramSignalScore\backend
 .\.venv\Scripts\Activate.ps1
 cd ..
-uvicorn backend.api.main:app --host 0.0.0.0 --port 8000
+uvicorn backend.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-Wait for: `Uvicorn running on http://0.0.0.0:8000`
+Wait for: `Uvicorn running on http://127.0.0.1:8000`
 
 ---
 
