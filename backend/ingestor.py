@@ -20,7 +20,7 @@ from typing import Any
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from telethon import TelegramClient, events
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DocumentAttributeSticker
 
 # Suppress harmless "Server sent a very new message" warnings that appear for
 # channels using scheduled or system messages with large internal IDs.
@@ -56,8 +56,22 @@ _notifier: Notifier | None = None
 
 # ─── Utility helpers ──────────────────────────────────────────────────────────
 
+def _is_sticker(doc: Any) -> bool:
+    """True if a Telethon document is a sticker.
+
+    Static stickers are sent as image/webp documents, so they pass a naive
+    mime-type check — but they are never charts or screenshots. Excluding them
+    keeps stickers out of the vision pipeline (no wasted Claude API call).
+    """
+    attrs = getattr(doc, "attributes", None) or []
+    return any(isinstance(a, DocumentAttributeSticker) for a in attrs)
+
+
 def _has_image(message: Any) -> bool:
-    """Return True if the Telethon message carries a photo or image document."""
+    """Return True if the Telethon message carries a photo or image document.
+
+    Stickers (including static image/webp ones) are intentionally excluded.
+    """
     media = getattr(message, "media", None)
     if media is None:
         return False
@@ -65,7 +79,7 @@ def _has_image(message: Any) -> bool:
         return True
     if isinstance(media, MessageMediaDocument):
         doc = getattr(media, "document", None)
-        if doc and getattr(doc, "mime_type", "").startswith("image/"):
+        if doc and getattr(doc, "mime_type", "").startswith("image/") and not _is_sticker(doc):
             return True
     return False
 

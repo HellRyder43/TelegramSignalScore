@@ -624,6 +624,8 @@ Wait for each one to finish before running the next. It typically takes 1–5 mi
 
 ✅ **Done when:** all your channels have been backfilled and the script prints "Done" for each one.
 
+> **Backfill alone does not produce Trust Scores.** It only *imports* history (text parsed by regex, images stored for later). Channels stay unscored until you run the verification pass in **Step 8** — and a meaningful score needs several signals to actually resolve against MT5 (a handful of resolved signals shows only the integrity baseline, not real performance).
+
 ---
 
 ### Step 6 — Process channel images (Window D, same window)

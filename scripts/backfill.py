@@ -31,7 +31,7 @@ load_dotenv()
 
 from supabase import create_client, Client
 from telethon import TelegramClient
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DocumentAttributeSticker
 
 from backend.config import (
     TG_API_ID,
@@ -55,6 +55,13 @@ _SESSION_PATH = str(_PROJECT_ROOT / TG_BACKFILL_SESSION_NAME)
 logger = logging.getLogger(__name__)
 
 
+def _is_sticker(doc) -> bool:
+    # Static stickers are image/webp documents but are never charts/screenshots.
+    # Excluding them keeps stickers out of the (deferred) vision pipeline.
+    attrs = getattr(doc, "attributes", None) or []
+    return any(isinstance(a, DocumentAttributeSticker) for a in attrs)
+
+
 def _has_image(message) -> bool:
     media = getattr(message, "media", None)
     if media is None:
@@ -63,7 +70,7 @@ def _has_image(message) -> bool:
         return True
     if isinstance(media, MessageMediaDocument):
         doc = getattr(media, "document", None)
-        if doc and getattr(doc, "mime_type", "").startswith("image/"):
+        if doc and getattr(doc, "mime_type", "").startswith("image/") and not _is_sticker(doc):
             return True
     return False
 
