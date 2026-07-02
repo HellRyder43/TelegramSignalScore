@@ -8,6 +8,62 @@
 
 ---
 
+## ▶ RUN IT LIVE — start here (you only need this)
+
+**Your setup is already done.** The Python venv (`backend\.venv`), `.env`, tracked channel IDs, Supabase, and the dashboard are all configured and verified. To monitor signals **from now on**, you do **not** need to load any history — you just start **three** processes, each in its own PowerShell window, and leave them running.
+
+> ### ⚠️ The one mistake that causes 90% of errors
+> **Every window must activate the venv first** with `.\.venv\Scripts\Activate.ps1`. You'll know it worked when the prompt shows `(.venv)` at the start.
+> If you run `python` **without** activating it, you get `ModuleNotFoundError: No module named 'dotenv'`. That does **not** mean anything is broken — it just means the venv isn't active. (This is exactly the error you hit.)
+
+**Before you start:** open MetaTrader 5, log into RoboForex, and leave an **M1 XAUUSD chart** visible. Verification can't run without it.
+
+---
+
+> **Both backend windows must be run from the project root** (`D:\AmirForex\TelegramSignalScore`), not from `backend\`. The commands below activate the venv *from* the root so you never have to `cd` around — if you run them from inside `backend\` you'll get `No module named 'backend'`.
+
+### Window 1 — Backend API  *(verifies signals every 5 min, sends Discord follow-ups)*
+
+```powershell
+cd D:\AmirForex\TelegramSignalScore
+.\backend\.venv\Scripts\Activate.ps1
+uvicorn backend.api.main:app --host 127.0.0.1 --port 8000
+```
+Wait for: `Uvicorn running on http://127.0.0.1:8000`. Leave it running.
+
+### Window 2 — Telegram listener  *(captures new messages/edits/deletes, fires Discord alerts)*
+
+```powershell
+cd D:\AmirForex\TelegramSignalScore
+.\backend\.venv\Scripts\Activate.ps1
+python -m backend.ingestor
+```
+Wait for: `Telegram ingestor running. Press Ctrl-C to stop.` Leave it running. **From this moment, every new signal in your tracked channels is captured live.**
+
+### Window 3 — Dashboard
+
+```powershell
+cd D:\AmirForex\TelegramSignalScore\frontend
+npm run dev
+```
+Wait for `Ready in x.xs`, then open **http://localhost:3000**.
+
+---
+
+**That's the whole system.** The dashboard starts **empty** and fills in as new signals arrive and resolve against MT5 — that's expected, since you're monitoring from now on, not importing the past.
+
+- **New signal posted** → captured, AI-assessed, instant Discord alert.
+- **Signal edited/deleted** → recorded, Discord follow-up fires (your tampering tripwire).
+- **Every 5 minutes** → the verifier checks open signals against MT5; resolved ones update the Trust Scores automatically.
+
+**To stop:** press `Ctrl+C` in each window. Everything is saved in Supabase; next time, just run the three commands again.
+
+> **Don't want to bother with history at all?** Then you're done — skip everything below about backfill. The old "Day 1" steps (`backfill`, `reprocess_images`, `ai_assess`) **only import past signals**, which you've said you don't care about. Ignore them.
+>
+> The reference sections below (one-time account/credential setup, historical loading, troubleshooting) are kept for completeness, but for day-to-day live monitoring the three windows above are all you need.
+
+---
+
 ## Setup checklist (overview)
 
 1. [ ] Install the base tools (Python, Node, Git, code editor)
@@ -485,9 +541,11 @@ Save the file.
 
 ---
 
-## 12. Day 1 — Starting everything and loading historical data
+## 12. (OPTIONAL) Loading historical data
 
-This is what you do on the **very first day** you run the system. You'll start the three background processes, then load history from your channels so the dashboard has real data to score.
+> **Skip this whole section if you only want to monitor from now on.** You already have the live system running from the **▶ RUN IT LIVE** section at the top — that's all you need. This section only *imports past signals* so the dashboard has data before new signals arrive. It does **not** change how live monitoring works.
+
+This is the optional first-day flow if you *do* want history. You'll start the three background processes, then load history from your channels so the dashboard has past data to score.
 
 **Set aside about 30–60 minutes.** Most of that time is waiting for scripts to finish — you don't need to watch them.
 
@@ -717,7 +775,7 @@ Channels: analyzed 3.
 Make sure MT5 is open and logged in, then in Window D run:
 
 ```powershell
-curl http://localhost:8000/verify/run -X POST
+Invoke-RestMethod -Uri http://localhost:8000/verify/run -Method Post
 ```
 
 You'll see in **Window A**:
@@ -836,7 +894,7 @@ Press **Ctrl+C** in each of the three windows. The system saves everything to Su
 
 **If a channel's score looks wrong after a few days:** the AI channel assessment runs automatically, but you can force a fresh one by running in a fourth window (while Window 1 is running):
 ```powershell
-curl http://localhost:8000/ai/assess/channel/<channel-uuid> -X POST
+Invoke-RestMethod -Uri http://localhost:8000/ai/assess/channel/<channel-uuid> -Method Post
 ```
 Get the UUID from Supabase → Table Editor → channels → copy the `id` value for that channel.
 
@@ -845,7 +903,7 @@ Get the UUID from Supabase → Table Editor → channels → copy the `id` value
 cd D:\AmirForex\TelegramSignalScore\backend
 .\.venv\Scripts\Activate.ps1
 cd ..
-curl http://localhost:8000/verify/run -X POST
+Invoke-RestMethod -Uri http://localhost:8000/verify/run -Method Post
 ```
 This triggers an immediate pass — you don't have to wait 5 minutes.
 
@@ -889,13 +947,16 @@ to recalculate channel scores with the new settings.
 
 | Problem | Most likely cause | Fix |
 |---|---|---|
+| `ModuleNotFoundError: No module named 'dotenv'` (or `telethon`, etc.) | The venv isn't active — you're running global Python | Run `.\.venv\Scripts\Activate.ps1` in that window first; the prompt must show `(.venv)`. Nothing is broken. |
+| `Invoke-WebRequest : A parameter cannot be found that matches parameter name 'X'` | In PowerShell, `curl` is an alias for `Invoke-WebRequest`, which has no `-X` | Use `Invoke-RestMethod -Uri <url> -Method Post`, or call real curl as `curl.exe -X POST <url>` |
+| `No module named 'backend'` when starting the ingestor/API | You're running from inside the `backend\` folder | Run from the project root: `cd D:\AmirForex\TelegramSignalScore` first, then the `python -m backend.ingestor` / `uvicorn` command |
 | Window 1 starts but shows no `Discord notifier initialized` | `DISCORD_BOT_TOKEN` or `DISCORD_CHANNEL_ID` missing or wrong in `.env` | Double-check both values in `.env`; restart Window 1 |
 | Window 2 starts but nothing happens when channels post | `TRACKED_CHANNEL_IDS` is empty or has wrong IDs | Re-run `python -m scripts.list_channels`, copy IDs, update `.env`, restart Window 2 |
 | Telegram keeps asking for login code | Session file missing or expired | Re-run `python -m scripts.list_channels` to create a fresh session, then restart Window 2 |
 | Dashboard at localhost:3000 shows empty table | No channels backfilled yet, or Window 1 not running | Complete Steps 5–8 in §12; make sure Window 1 is running |
-| Trust score shows 0 for all channels | No signals have resolved yet | MT5 must be open; run `curl http://localhost:8000/verify/run -X POST` to force a check |
-| Verifier says "MT5 not connected" | MT5 is closed or not logged in | Open MT5, log into RoboForex, load an M1 XAUUSD chart; retry |
-| `MT5_SYMBOL` error in logs | Symbol name is wrong | Open MT5 → Market Watch → find the exact gold symbol name (e.g. `XAUUSD.r`) → update `.env` |
+| Trust score shows 0 for all channels | No signals have resolved yet | MT5 must be open; run `Invoke-RestMethod -Uri http://localhost:8000/verify/run -Method Post` to force a check |
+| Verifier says "MT5 not connected: copy_rates_from returned no data" | Either MT5 is closed/not logged in, **or** `MT5_SYMBOL` doesn't match your broker's exact name (this is the usual cause even when MT5 is open) | Open MT5 and load an M1 XAUUSD chart; then confirm `MT5_SYMBOL` matches **exactly**, including case — MT5 symbol names are case-sensitive (`XAUUSD` ≠ `xauusd`) |
+| `MT5_SYMBOL` error / no price data | Symbol name is wrong or wrong case | Open MT5 → Market Watch → right-click → Symbols → copy the **exact** gold name (case-sensitive, e.g. `XAUUSD`) → update `.env` → restart Window 1 |
 | Images in channels are not being classified | `ANTHROPIC_API_KEY` missing or no billing credit | Add key and billing at console.anthropic.com; then run `reprocess_images` |
 | `Activate.ps1` blocked by PowerShell | Execution policy restriction on your machine | Run this once: `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` |
 | `uvicorn: command not found` | Venv not activated | You must run `.\.venv\Scripts\Activate.ps1` before any `uvicorn` or `python -m` command |

@@ -283,6 +283,21 @@ async def main() -> None:
         await tg_client.start()  # interactive; connection already established above
     logger.info("Connected.")
 
+    # Telethon must have "seen" a channel before we can fetch its messages by the
+    # bare numeric telegram_id stored in the DB. Backfill records channels by their
+    # unmarked entity.id (a plain positive int); handed straight to get_messages,
+    # Telethon can't tell it's a channel and treats it as a PeerUser, failing with
+    # "Could not find the input entity for PeerUser(...)". Loading dialogs once
+    # fills the session entity cache with every joined channel, after which
+    # get_messages(<id>, ...) resolves. (See Telethon docs: concepts/entities.)
+    logger.info("Loading dialogs to populate the entity cache...")
+    try:
+        await tg_client.get_dialogs()
+    except Exception as exc:
+        logger.warning(
+            "Could not load dialogs — entity resolution may still fail: %s", exc
+        )
+
     counts: dict[str, int] = {"zone_image": 0, "mt5_screenshot": 0, "non_signal": 0, "image_deferred": 0}
 
     for i, row in enumerate(rows, 1):

@@ -29,8 +29,14 @@ from backend.config import (
     AI_CHANNEL_ANALYSIS_ENABLED,
     AI_CHANNEL_ANALYSIS_MIN_SIGNALS,
     AI_CHANNEL_ANALYSIS_MIN_INTERVAL_SECS,
+    SYNTHETIC_EXIT_ENABLED,
 )
-from backend.verifier import verify_signal, MT5NotConnectedError, EntryNeverFilledError
+from backend.verifier import (
+    verify_signal,
+    verify_signal_synthetic,
+    MT5NotConnectedError,
+    EntryNeverFilledError,
+)
 from backend.scorer import compute_trust_score
 from backend.notifier.base import Notifier
 from backend.db_utils import maybe_one
@@ -244,17 +250,39 @@ def _run_verification_pass(db: Client) -> tuple[int, list[ResolutionAlert]]:
 
     affected_channels: set[str] = set()
     resolution_alerts: list[ResolutionAlert] = []
+    skipped = 0
 
     for sig in rows:
+        # Verification needs a concrete entry price. Without one there is nothing
+        # to fill against, so skip (crash-safe vs float(None)); stays unresolved.
+        if sig.get("entry") is None:
+            skipped += 1
+            continue
         try:
-            result = verify_signal(
-                direction=sig["direction"],
-                entry=float(sig["entry"]),
-                stop_loss=float(sig["stop_loss"]),
-                take_profit=float(sig["take_profit_1"]),
-                posted_at=sig["posted_at"],
-                symbol=MT5_SYMBOL,
-            )
+            if sig.get("stop_loss") is None:
+                # No stated stop-loss → symmetric synthetic time-horizon exit.
+                # (A first-touch check with only a TP could ever record a win,
+                # which would bias the record; the time-exit can go either way.)
+                if not SYNTHETIC_EXIT_ENABLED:
+                    skipped += 1
+                    continue
+                result = verify_signal_synthetic(
+                    direction=sig["direction"],
+                    entry=float(sig["entry"]),
+                    posted_at=sig["posted_at"],
+                    symbol=MT5_SYMBOL,
+                )
+            else:
+                tp1 = sig.get("take_profit_1")
+                result = verify_signal(
+                    direction=sig["direction"],
+                    entry=float(sig["entry"]),
+                    stop_loss=float(sig["stop_loss"]),
+                    # None lets verify_signal apply its default-TP fallback.
+                    take_profit=float(tp1) if tp1 is not None else None,
+                    posted_at=sig["posted_at"],
+                    symbol=MT5_SYMBOL,
+                )
 
             if result.outcome == "unresolved":
                 continue
@@ -267,6 +295,7 @@ def _run_verification_pass(db: Client) -> tuple[int, list[ResolutionAlert]]:
                     "candles_walked": result.candles_walked,
                     "is_ambiguous": result.is_ambiguous,
                     "notes": result.notes,
+                    "method": result.method,
                 },
                 on_conflict="signal_id",
             ).execute()
@@ -310,7 +339,13 @@ def _run_verification_pass(db: Client) -> tuple[int, list[ResolutionAlert]]:
         except Exception as exc:
             logger.error("Channel AI analysis failed (non-fatal): %s", exc)
 
-    return len(rows), resolution_alerts
+    if skipped:
+        logger.info(
+            "Verification pass: skipped %d signal(s) missing entry/stop-loss (unverifiable)",
+            skipped,
+        )
+
+    return len(rows) - skipped, resolution_alerts
 
 
 # ─── Background scheduler ─────────────────────────────────────────────────────

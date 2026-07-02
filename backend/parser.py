@@ -18,8 +18,10 @@ Direction = Literal["BUY", "SELL"]
 
 _DIRECTION_RE = re.compile(r'\b(BUY|SELL|LONG|SHORT)\b', re.IGNORECASE)
 
+# Includes "CL" / "cut loss" / "cutloss" — how many gold channels write their
+# stop-loss (e.g. "Price @ 4016-4008 Cl 4006 Tp open").
 _SL_RE = re.compile(
-    r'\b(?:sl|stop[\s\-]?loss|stop)\b[\s:]*([0-9]{3,6}(?:\.[0-9]+)?)',
+    r'\b(?:sl|stop[\s\-]?loss|stop|cl|cut[\s\-]?loss)\b[\s:]*([0-9]{3,6}(?:\.[0-9]+)?)',
     re.IGNORECASE,
 )
 

@@ -16,6 +16,12 @@ MT5_SYMBOL: str = os.getenv("MT5_SYMBOL", "XAUUSD")
 # How long after a signal is posted to keep trying to resolve it (hours)
 VERIFICATION_WINDOW_HOURS: int = 48
 
+# Reject signals whose entry is implausibly far from the market price during the
+# verification window — e.g. a pip-count like "300" misparsed as a price while gold
+# trades ~4000. Such entries are treated as unverifiable, not real forward signals,
+# which stops them poisoning the points/outcome record.
+MAX_ENTRY_GAP_POINTS: float = float(os.getenv("MAX_ENTRY_GAP_POINTS", "500"))
+
 # 1 point = $1.00 price movement on XAUUSD.
 # Convention: retail gold traders say "50 pips" to mean a $50 price move.
 # With 0.01 lot (1 oz), a 50-point move = $50 profit/loss.
@@ -29,6 +35,18 @@ VERIFY_INTERVAL_SECS: int = int(os.getenv("VERIFY_INTERVAL_SECS", "300"))
 # Signals are considered won when price moves this many points in the signal's direction.
 # Set to 50 to match the user's personal minimum profit target.
 DEFAULT_TP_PIPS: int = 50
+
+# ─── Synthetic time-horizon exit ──────────────────────────────────────────────
+# Fallback for signals that state NO stop-loss at all (e.g. "BUY @ 4060 TP open").
+# Without an exit there is no natural win/loss, so once the entry fills we measure
+# the position's P/L a fixed number of minutes later: profit → win, otherwise loss.
+# This is symmetric (it can land as a loss just as easily as a win), unlike a
+# TP-only check which could only ever win. Such outcomes are ESTIMATES: they are
+# tagged method='synthetic_horizon' and counted at a reduced weight in scoring.
+SYNTHETIC_EXIT_ENABLED: bool = os.getenv("SYNTHETIC_EXIT_ENABLED", "true").lower() == "true"
+SYNTHETIC_EXIT_MINUTES: int = int(os.getenv("SYNTHETIC_EXIT_MINUTES", "10"))
+# Performance weight of a synthetic-exit outcome (like BACKFILL/ZONE weights).
+SYNTHETIC_SIGNAL_WEIGHT: float = float(os.getenv("SYNTHETIC_SIGNAL_WEIGHT", "0.4"))
 
 # ─── Trust Score Weights ──────────────────────────────────────────────────────
 # Components sum to 100 at maximum. Weights are maximums for each component.

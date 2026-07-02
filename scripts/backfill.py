@@ -158,6 +158,13 @@ async def _backfill_channel(client, db, channel_ref: str, limit: int) -> None:
         text: str | None = message.message or None
         has_img = _has_image(message)
         msg_type = classify_message(text, has_img)
+        # Backfill never runs the vision pipeline (only the live ingestor does).
+        # classify_message optimistically returns "zone_image" for any image when
+        # ANTHROPIC_API_KEY is set, but here that image is never actually analyzed —
+        # so defer every image that isn't already a parseable text caption to
+        # image_deferred, which is exactly what reprocess_images picks up later.
+        if has_img and msg_type != "text_signal":
+            msg_type = "image_deferred"
 
         # Idempotent: skip if already stored
         existing = maybe_one(

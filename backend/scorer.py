@@ -20,6 +20,7 @@ from backend.config import (
     PENALTY_CONTRADICTED_SCREENSHOT,
     BACKFILL_SIGNAL_WEIGHT,
     ZONE_SIGNAL_WEIGHT,
+    SYNTHETIC_SIGNAL_WEIGHT,
     score_to_verdict,
     AI_LOW_QUALITY_THRESHOLD,
     AI_LOW_QUALITY_WEIGHT,
@@ -107,7 +108,7 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
     if signal_ids:
         outcome_rows = (
             db_client.table("signal_outcomes")
-            .select("signal_id, outcome, points")
+            .select("signal_id, outcome, points, method")
             .in_("signal_id", signal_ids)
             .neq("outcome", "unresolved")
             .execute()
@@ -187,6 +188,10 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
         outcome = row["outcome"]
         weight = _signal_weight(sig.get("signal_type", "text"), sig.get("source", "live"))
 
+        # Estimated (no stated stop-loss) outcomes count for less.
+        if row.get("method") == "synthetic_horizon":
+            weight *= SYNTHETIC_SIGNAL_WEIGHT
+
         # Downweight low-quality signals
         if qa:
             qs = float(qa.get("quality_score") or 1.0)
@@ -249,6 +254,9 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
         avg_pts = None
         expectancy_component = 0.0
 
+    # Raw (unweighted) total points across verified signals — for the dashboard.
+    total_points_raw = sum(p for p, _ in weighted_points) if weighted_points else 0.0
+
     raw_performance = win_rate_component + rr_component + expectancy_component
 
     # ── Sample-size dampener ──────────────────────────────────────────────────
@@ -261,6 +269,7 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
     post_move_edit_count = sum(1 for e in edit_rows if e.get("is_post_move_edit"))
     delete_signal_count = len(del_rows)
     contradicted_count = sum(1 for s in shot_rows if s.get("verdict") == "contradicted")
+    confirmed_count = sum(1 for s in shot_rows if s.get("verdict") == "confirmed")
 
     integrity = float(WEIGHT_INTEGRITY)
     total_edit_penalty = 0.0
@@ -364,7 +373,20 @@ def compute_trust_score(channel_id: str, db_client) -> ScoreBreakdown:
     ).execute()
 
     db_client.table("channels").update(
-        {"trust_score": int(breakdown.final_score), "verdict": verdict}
+        {
+            "trust_score": int(breakdown.final_score),
+            "verdict": verdict,
+            # Denormalized display stats read directly by the overview dashboard.
+            # All derived from source tables above, so this is idempotent.
+            "verified_win_rate": (round(win_rate, 4) if win_rate_pct is not None else None),
+            "sample_size": total_verified,
+            "total_points": round(total_points_raw, 1),
+            "avg_risk_reward": (round(avg_rr, 2) if avg_rr is not None else None),
+            "edit_count": edit_count,
+            "delete_count": delete_signal_count,
+            "screenshot_confirmed": confirmed_count,
+            "screenshot_contradicted": contradicted_count,
+        }
     ).eq("id", channel_id).execute()
 
     return breakdown
